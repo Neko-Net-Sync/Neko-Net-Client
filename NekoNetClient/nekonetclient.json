@@ -1,0 +1,12 @@
+{
+  "Author": "Neko-Net-Sync",
+  "Name": "Neko Net Client",
+  "Punchline": "Let others see you as you see yourself.",
+  "Description": "This plugin will synchronize your Penumbra mods and current Glamourer state with other paired clients automatically.",
+  "InternalName": "nekonetclient",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "customization"
+  ],
+  "RepoUrl": "https://github.com/Neko-Net-Sync/Neko-Net-Client"
+}
