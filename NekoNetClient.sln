@@ -12,8 +12,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NekoNetClient", "NekoNetCli
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NekoNet.API", "NekoNetAPI\NekoNetAPI\NekoNet.API.csproj", "{F66B5F59-CA1C-070B-D281-265E863E146D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OtterGui", "OtterGui\OtterGui.csproj", "{9EC71A1C-3348-BA01-85FA-8361B6EB8537}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -28,10 +26,6 @@ Global
 		{F66B5F59-CA1C-070B-D281-265E863E146D}.Debug|x64.Build.0 = Debug|Any CPU
 		{F66B5F59-CA1C-070B-D281-265E863E146D}.Release|x64.ActiveCfg = Release|Any CPU
 		{F66B5F59-CA1C-070B-D281-265E863E146D}.Release|x64.Build.0 = Release|Any CPU
-		{9EC71A1C-3348-BA01-85FA-8361B6EB8537}.Debug|x64.ActiveCfg = Debug|x64
-		{9EC71A1C-3348-BA01-85FA-8361B6EB8537}.Debug|x64.Build.0 = Debug|x64
-		{9EC71A1C-3348-BA01-85FA-8361B6EB8537}.Release|x64.ActiveCfg = Release|x64
-		{9EC71A1C-3348-BA01-85FA-8361B6EB8537}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

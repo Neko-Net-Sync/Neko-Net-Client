@@ -14,7 +14,6 @@ using NekoNetClient.Services;
 using NekoNetClient.Services.Mediator;
 using NekoNetClient.Services.ServerConfiguration;
 using NekoNetClient.WebAPI.SignalR;
-using OtterGui.Services;
 using System.Numerics;
 using System.Text.RegularExpressions;
 
