@@ -58,7 +58,7 @@ public class CompactUi : WindowMediatorSubscriberBase
         ServerConfigurationManager serverManager, MareMediator mediator, FileUploadManager fileTransferManager,
         TagHandler tagHandler, DrawEntityFactory drawEntityFactory, SelectTagForPairUi selectTagForPairUi, SelectPairForTagUi selectPairForTagUi,
         PerformanceCollectorService performanceCollectorService, IpcManager ipcManager)
-        : base(logger, mediator, "###MareSynchronosMainUI", performanceCollectorService)
+        : base(logger, mediator, "###Neko-NetMainUI", performanceCollectorService)
     {
         _uiSharedService = uiShared;
         _configService = configService;
@@ -114,11 +114,11 @@ public class CompactUi : WindowMediatorSubscriberBase
 #if DEBUG
         string dev = "Dev Build";
         var ver = Assembly.GetExecutingAssembly().GetName().Version!;
-        WindowName = $"Mare Synchronos {dev} ({ver.Major}.{ver.Minor}.{ver.Build})###MareSynchronosMainUI";
+        WindowName = $"Neko-Net {dev} ({ver.Major}.{ver.Minor}.{ver.Build})###Neko-NetMainUI";
         Toggle();
 #else
         var ver = Assembly.GetExecutingAssembly().GetName().Version;
-        WindowName = "Mare Synchronos " + ver.Major + "." + ver.Minor + "." + ver.Build + "###MareSynchronosMainUI";
+        WindowName = "Neko-Net " + ver.Major + "." + ver.Minor + "." + ver.Build + "###Neko-NetMainUI";
 #endif
         Mediator.Subscribe<SwitchToMainUiMessage>(this, (_) => IsOpen = true);
         Mediator.Subscribe<SwitchToIntroUiMessage>(this, (_) => IsOpen = false);
@@ -151,8 +151,8 @@ public class CompactUi : WindowMediatorSubscriberBase
                 ImGui.AlignTextToFramePadding();
                 ImGui.TextColored(ImGuiColors.DalamudRed, unsupported);
             }
-            UiSharedService.ColorTextWrapped($"Your Mare Synchronos installation is out of date, the current version is {ver.Major}.{ver.Minor}.{ver.Build}. " +
-                $"It is highly recommended to keep Mare Synchronos up to date. Open /xlplugins and update the plugin.", ImGuiColors.DalamudRed);
+            UiSharedService.ColorTextWrapped($"Your Neko-Net installation is out of date, the current version is {ver.Major}.{ver.Minor}.{ver.Build}. " +
+                $"It is highly recommended to keep Neko-Net up to date. Open /xlplugins and update the plugin.", ImGuiColors.DalamudRed);
         }
 
         if (!_ipcManager.Initialized)
@@ -566,10 +566,10 @@ public class CompactUi : WindowMediatorSubscriberBase
         {
             ServerState.Connecting => "Attempting to connect to the server.",
             ServerState.Reconnecting => "Connection to server interrupted, attempting to reconnect to the server.",
-            ServerState.Disconnected => "You are currently disconnected from the Mare Synchronos server.",
+            ServerState.Disconnected => "You are currently disconnected from the Neko-Net server.",
             ServerState.Disconnecting => "Disconnecting from the server",
             ServerState.Unauthorized => "Server Response: " + _apiController.AuthFailureMessage,
-            ServerState.Offline => "Your selected Mare Synchronos server is currently offline.",
+            ServerState.Offline => "Your selected Neko-Net server is currently offline.",
             ServerState.VersionMisMatch =>
                 "Your plugin or the server you are connecting to is out of date. Please update your plugin now. If you already did so, contact the server provider to update their server to the latest version.",
             ServerState.RateLimited => "You are rate limited for (re)connecting too often. Disconnect, wait 10 minutes and try again.",

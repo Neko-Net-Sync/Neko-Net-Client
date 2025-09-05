@@ -1,5 +1,6 @@
 ﻿using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Colors;
+using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Utility;
@@ -8,10 +9,12 @@ using NekoNetClient.FileCache;
 using NekoNetClient.Localization;
 using NekoNetClient.MareConfiguration;
 using NekoNetClient.MareConfiguration.Models;
+using NekoNetClient.NekoHelpers;
 using NekoNetClient.Services;
 using NekoNetClient.Services.Mediator;
 using NekoNetClient.Services.ServerConfiguration;
 using NekoNetClient.WebAPI.SignalR;
+using OtterGui.Services;
 using System.Numerics;
 using System.Text.RegularExpressions;
 
@@ -25,8 +28,19 @@ public partial class IntroUi : WindowMediatorSubscriberBase
     private readonly ServerConfigurationManager _serverConfigurationManager;
     private readonly DalamudUtilService _dalamudUtilService;
     private readonly UiSharedService _uiShared;
+    private readonly FileDialogManager _fileDialogManager;
+    // Holds folders found by "Auto-detect Mare Folders"
+    private readonly List<string> _autoDetected = new();
+
     private int _currentLanguage;
     private bool _readFirstPage;
+    private bool _showImportModal;
+    private string _importPath = "";
+    private ImportWizard.ScanResult? _scan;
+    private string _cachePathOverride = "";
+    private bool _reuseCache;
+    private bool _isImporting = false;
+    //private bool _shouldOpenFileDialog = false; // Added this field
 
     private string _secretKey = string.Empty;
     private string _timeoutLabel = string.Empty;
@@ -36,13 +50,15 @@ public partial class IntroUi : WindowMediatorSubscriberBase
 
     public IntroUi(ILogger<IntroUi> logger, UiSharedService uiShared, MareConfigService configService,
         CacheMonitor fileCacheManager, ServerConfigurationManager serverConfigurationManager, MareMediator mareMediator,
-        PerformanceCollectorService performanceCollectorService, DalamudUtilService dalamudUtilService) : base(logger, mareMediator, "Neko-Net Setup", performanceCollectorService)
+        PerformanceCollectorService performanceCollectorService, DalamudUtilService dalamudUtilService,
+        FileDialogManager fileDialogManager) : base(logger, mareMediator, "Neko-Net Setup", performanceCollectorService)
     {
         _uiShared = uiShared;
         _configService = configService;
         _cacheMonitor = fileCacheManager;
         _serverConfigurationManager = serverConfigurationManager;
         _dalamudUtilService = dalamudUtilService;
+        _fileDialogManager = fileDialogManager;
         IsOpen = false;
         ShowCloseButton = false;
         RespectCloseHotkey = false;
@@ -65,15 +81,40 @@ public partial class IntroUi : WindowMediatorSubscriberBase
 
     private int _prevIdx = -1;
 
+    private void OpenFolderDialog()
+    {
+        _fileDialogManager.OpenFolderDialog("Select Mare/OpenSynchronos Config Folder", (success, path) =>
+        {
+            if (success && Directory.Exists(path))
+            {
+                _importPath = path;
+            }
+        }, Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+    }
+
+    private void OpenCacheFolderDialog()
+    {
+        _fileDialogManager.OpenFolderDialog("Select Cache Folder", (success, path) =>
+        {
+            if (success && Directory.Exists(path))
+            {
+                _cachePathOverride = path;
+            }
+        }, string.IsNullOrEmpty(_cachePathOverride) ?
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) :
+            Path.GetDirectoryName(_cachePathOverride));
+    }
+
     protected override void DrawInternal()
     {
+
         if (_uiShared.IsInGpose) return;
 
         if (!_configService.Current.AcceptedAgreement && !_readFirstPage)
         {
             _uiShared.BigText("Welcome to Neko-Net");
             ImGui.Separator();
-            UiSharedService.TextWrapped("Neko-Net is a plugin that will replicate your full current character state including all Penumbra mods to other paired Mare Synchronos users. " +
+            UiSharedService.TextWrapped("Neko-Net is a plugin that will replicate your full current character state including all Penumbra mods to other paired Neko-Net users. " +
                               "Note that you will have to have Penumbra as well as Glamourer installed to use this plugin.");
             UiSharedService.TextWrapped("We will have to setup a few things first before you can start using this plugin. Click on next to continue.");
 
@@ -82,6 +123,270 @@ public partial class IntroUi : WindowMediatorSubscriberBase
                                  "If you want to use this plugin you will have to move your mods to Penumbra.", ImGuiColors.DalamudYellow);
             if (!_uiShared.DrawOtherPluginState()) return;
             ImGui.Separator();
+
+            // Enhanced Import from Folder button
+            if (ImGui.Button("Import from Folder…"))
+            {
+                _showImportModal = true;
+                _importPath = "";
+                _scan = null;
+                _autoDetected.Clear();   
+                // ImGui.OpenPopup("Import from Mare/OpenSynchronos"); // remove this
+            }
+
+
+            ImGui.SameLine();
+            UiSharedService.AttachToolTip("Pick a prior Mare/OpenSynchronos/NekoNetClient config folder, choose servers to import, and optionally reuse its cache.");
+
+            // Enhanced Import Modal
+            // Enhanced Import "window" (non-modal)
+            if (_showImportModal)
+            {
+                // Optional: center on first open
+                if (ImGui.IsWindowAppearing())
+                    ImGui.SetNextWindowFocus();
+
+                ImGui.SetNextWindowSizeConstraints(new Vector2(620, 0), new Vector2(900, 1200));
+                if (ImGui.Begin("Import from Mare/OpenSynchronos", ref _showImportModal,
+                    ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoCollapse))
+                {
+                    var wizard = new ImportWizard(_configService, _serverConfigurationManager);
+
+                    ImGui.TextUnformatted("Source folder containing server.json (and optionally config.json / FileCache.csv)");
+
+                    ImGui.SetNextItemWidth(400);
+                    ImGui.InputTextWithHint("##importpath", "Select folder containing Mare/OpenSynchronos config files", ref _importPath);
+
+                    ImGui.SameLine();
+                    if (ImGui.Button("Browse..."))
+                    {
+                        // Call the file dialog *directly* now (no deferral flag needed)
+                        OpenFolderDialog();
+                    }
+
+                    ImGui.TextUnformatted("Quick presets:");
+                    if (ImGui.Button("Mare Synchronos"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "MareSynchronos");
+                    ImGui.SameLine();
+                    if (ImGui.Button("OpenSynchronos"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "OpenSynchronos");
+                    ImGui.SameLine();
+                    if (ImGui.Button("Neko-Net"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "NekoNetClient");
+                    ImGui.SameLine();
+                    if (ImGui.Button("Tera Sync"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "TeraSyncV2");
+                    ImGui.SameLine();
+                    if (ImGui.Button("Lightless Sync"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "LightlessSync");
+
+                    // Inline auto-detect results instead of another popup (keeps things non-modal)
+                    if (ImGui.Button("Auto-detect Mare Folders"))
+                    {
+                        _autoDetected.Clear();
+                        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                        var pluginConfigs = Path.Combine(appData, "XIVLauncher", "pluginConfigs");
+                        if (Directory.Exists(pluginConfigs))
+                        {
+                            _autoDetected.AddRange(
+                                Directory.GetDirectories(pluginConfigs)
+                                    .Where(dir =>
+                                    {
+                                        var name = Path.GetFileName(dir).ToLowerInvariant();
+                                        return name.Contains("mare") || name.Contains("synchronos") || name.Contains("neko");
+                                    })
+                                    .Where(dir => File.Exists(Path.Combine(dir, "server.json")))
+                                    .OrderByDescending(dir => new DirectoryInfo(dir).LastWriteTimeUtc)
+                            );
+                        }
+                    }
+
+
+                    // Optional: keep a field List<string> _autoDetected = new();
+                    if (_autoDetected is { Count: > 0 })
+                    {
+                        ImGui.Separator();
+                        ImGui.TextUnformatted("Found Mare-like folders:");
+                        ImGui.BeginChild("autodetect_list", new Vector2(0, 120), true);
+                        foreach (var folder in _autoDetected)
+                        {
+                            var name = Path.GetFileName(folder);
+                            var last = new DirectoryInfo(folder).LastWriteTimeUtc;
+                            if (ImGui.Selectable($"{name} (modified: {last:yyyy-MM-dd})"))
+                                _importPath = folder;
+                        }
+                        ImGui.EndChild();
+                    }
+
+                    ImGui.Separator();
+
+                    if (!string.IsNullOrWhiteSpace(_importPath))
+                    {
+                        if (!Directory.Exists(_importPath))
+                            UiSharedService.ColorTextWrapped("Folder does not exist!", ImGuiColors.DalamudRed);
+                        else if (!File.Exists(Path.Combine(_importPath, "server.json")))
+                            UiSharedService.ColorTextWrapped("server.json not found in this folder.", ImGuiColors.DalamudYellow);
+                        else
+                            UiSharedService.ColorTextWrapped("✓ Valid Mare config folder detected", ImGuiColors.HealerGreen);
+                    }
+
+                    using (ImRaii.Disabled(string.IsNullOrWhiteSpace(_importPath)))
+                    {
+                        if (ImGui.Button("Scan Folder"))
+                        {
+                            try
+                            {
+                                _scan = wizard.ScanFolder(_importPath);
+                                if (_scan?.SourceConfig != null)
+                                {
+                                    _cachePathOverride = _scan.SuggestedCacheFolder ?? string.Empty;
+                                    _reuseCache = _scan.FileCacheExists && !string.IsNullOrWhiteSpace(_cachePathOverride);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _scan = new ImportWizard.ScanResult
+                                {
+                                    SourceFolder = _importPath,
+                                    Error = $"Scan failed: {ex.Message}"
+                                };
+                            }
+                        }
+                    }
+
+                    ImGui.Separator();
+
+                    if (_scan != null)
+                    {
+                        if (!string.IsNullOrEmpty(_scan.Error))
+                        {
+                            UiSharedService.ColorTextWrapped(_scan.Error, ImGuiColors.DalamudRed);
+                        }
+                        else
+                        {
+                            ImGui.TextUnformatted("Cache folder to use:");
+                            ImGui.SetNextItemWidth(300);
+                            ImGui.InputTextWithHint("##cachePath", "Choose a cache folder (optional)", ref _cachePathOverride);
+
+                            ImGui.SameLine();
+                            if (ImGui.Button("Browse##cache"))
+                                OpenCacheFolderDialog();
+
+                            if (_scan.FileCacheExists)
+                                ImGui.Checkbox("Reuse existing FileCache.csv (skip re-scan)", ref _reuseCache);
+
+                            ImGui.Separator();
+
+                            using (var table = ImRaii.Table("import_servers_table", 5,
+                                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
+                            {
+                                if (table)
+                                {
+                                    ImGui.TableSetupColumn("Import", ImGuiTableColumnFlags.WidthFixed, 60);
+                                    ImGui.TableSetupColumn("Name");
+                                    ImGui.TableSetupColumn("URI");
+                                    ImGui.TableSetupColumn("Auth");
+                                    ImGui.TableSetupColumn("OAuth");
+                                    ImGui.TableHeadersRow();
+
+                                    for (int i = 0; i < _scan.SourceServers.Count; i++)
+                                    {
+                                        var row = _scan.SourceServers[i];
+                                        ImGui.TableNextRow();
+
+                                        ImGui.TableSetColumnIndex(0);
+                                        var sel = row.Selected;
+                                        if (ImGui.Checkbox($"##sel_{i}", ref sel))
+                                            row.Selected = sel;
+
+                                        ImGui.TableSetColumnIndex(1);
+                                        if (i == _scan.SourceCurrentIndex)
+                                            UiSharedService.ColorText(row.ServerName + " (current)", ImGuiColors.HealerGreen);
+                                        else
+                                            ImGui.TextUnformatted(row.ServerName);
+
+                                        ImGui.TableSetColumnIndex(2);
+                                        ImGui.TextUnformatted(row.ServerUri);
+
+                                        ImGui.TableSetColumnIndex(3);
+                                        ImGui.TextUnformatted(row.AuthCount.ToString());
+
+                                        ImGui.TableSetColumnIndex(4);
+                                        ImGui.TextUnformatted(row.UseOAuth2 ? (row.HasToken ? "OAuth2 ✓" : "OAuth2") : "SecretKey");
+                                    }
+                                }
+                            }
+
+                            ImGui.Separator();
+
+                            var selectedCount = _scan.SourceServers.Count(s => s.Selected);
+                            using (ImRaii.Disabled(selectedCount == 0))
+                            {
+                                if (ImGui.Button($"Import Selected ({selectedCount})"))
+                                {
+                                    var chosen = _scan.SourceServers.Where(s => s.Selected).ToList();
+                                    var summary = wizard.ImportSelected(_scan, chosen, _cachePathOverride, _reuseCache);
+
+                                    if (!string.IsNullOrEmpty(summary.Error))
+                                    {
+                                        UiSharedService.ColorTextWrapped(summary.Error, ImGuiColors.DalamudRed);
+                                    }
+                                    else
+                                    {
+                                        UiSharedService.ColorTextWrapped(
+                                            $"Successfully imported {summary.Created + summary.Updated} server(s)!\n" +
+                                            $"- Created: {summary.Created} new\n" +
+                                            $"- Updated: {summary.Updated} existing\n" +
+                                            $"- Cache: {(summary.CacheConfigured ? (_reuseCache ? "reused (skipped scan)" : "configured for new scan") : "unchanged")}",
+                                            ImGuiColors.HealerGreen);
+
+                                        // Close this window and advance
+                                        _showImportModal = false;
+                                        _readFirstPage = true;
+#if !DEBUG
+                            _timeoutTask = Task.Run(async () =>
+                            {
+                                for (int i = 2; i > 0; i--)
+                                {
+                                    _timeoutLabel = $"Continuing in {i}s";
+                                    await Task.Delay(1000);
+                                }
+                            });
+#else
+                                        _timeoutTask = Task.CompletedTask;
+#endif
+                                    }
+                                }
+                            }
+
+                            ImGui.SameLine();
+                        }
+                    }
+
+                    // Close button (always)
+                    if (ImGui.Button("Close"))
+                        _showImportModal = false;
+
+                    ImGui.End();
+                }
+            }
+
+
+            /*/ Draw the file dialog AFTER the modal, so it renders on top
+            if (_shouldOpenFileDialog)
+            {
+                _shouldOpenFileDialog = false;
+                OpenFolderDialog();
+            }
+            */
+            // Always draw the file dialog manager so it can handle callbacks
+            _fileDialogManager.Draw();
+
             if (ImGui.Button("Next##toAgreement"))
             {
                 _readFirstPage = true;
@@ -212,7 +517,7 @@ public partial class IntroUi : WindowMediatorSubscriberBase
 
             if (ImGui.Button("Join the Neko-Net Discord"))
             {
-                Util.OpenLink("https://discord.gg/PZfGmuF9");
+                Util.OpenLink("https://discord.gg/8yjsdMcxB4");
             }
 
             UiSharedService.TextWrapped("For all other non official services you will have to contact the appropriate service provider how to obtain a secret key.");

@@ -13,7 +13,7 @@ namespace NekoNetClient.Services;
 
 public sealed class CommandManagerService : IDisposable
 {
-    private const string _commandName = "/mare";
+    private const string _commandName = "/nsync";
 
     private readonly ApiController _apiController;
     private readonly ICommandManager _commandManager;
@@ -36,13 +36,13 @@ public sealed class CommandManagerService : IDisposable
         _mareConfigService = mareConfigService;
         _commandManager.AddHandler(_commandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Opens the Mare Synchronos UI" + Environment.NewLine + Environment.NewLine +
+            HelpMessage = "Opens the Neko-Net UI" + Environment.NewLine + Environment.NewLine +
                 "Additionally possible commands:" + Environment.NewLine +
-                "\t /mare toggle - Disconnects from Mare, if connected. Connects to Mare, if disconnected" + Environment.NewLine +
-                "\t /mare toggle on|off - Connects or disconnects to Mare respectively" + Environment.NewLine +
-                "\t /mare gpose - Opens the Mare Character Data Hub window" + Environment.NewLine +
-                "\t /mare analyze - Opens the Mare Character Data Analysis window" + Environment.NewLine +
-                "\t /mare settings - Opens the Mare Settings window"
+                "\t /nsync toggle - Disconnects from Neko-Net session, if connected. Connects to last active Neko-Net session, if disconnected" + Environment.NewLine +
+                "\t /nsync toggle on|off - Connects or disconnects to Neko-Net respectively" + Environment.NewLine +
+                "\t /nsync gpose - Opens the Neko-Net Character Data Hub window" + Environment.NewLine +
+                "\t /nsync analyze - Opens the Neko-Net Character Data Analysis window" + Environment.NewLine +
+                "\t /nsync settings - Opens the Neko-Net Settings window"
         });
     }
 
@@ -72,7 +72,7 @@ public sealed class CommandManagerService : IDisposable
         {
             if (_apiController.ServerState == WebAPI.SignalR.Utils.ServerState.Disconnecting)
             {
-                _mediator.Publish(new NotificationMessage("Mare disconnecting", "Cannot use /toggle while Mare Synchronos is still disconnecting",
+                _mediator.Publish(new NotificationMessage("Mare disconnecting", "Cannot use /toggle while Neko-Net is still disconnecting",
                     NotificationType.Error));
             }
 

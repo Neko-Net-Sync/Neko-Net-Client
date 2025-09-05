@@ -77,7 +77,7 @@ public class SettingsUi : WindowMediatorSubscriberBase
         FileCacheManager fileCacheManager,
         FileCompactor fileCompactor, ApiController apiController,
         IpcManager ipcManager, CacheMonitor cacheMonitor,
-        DalamudUtilService dalamudUtilService, HttpClient httpClient) : base(logger, mediator, "Mare Synchronos Settings", performanceCollector)
+        DalamudUtilService dalamudUtilService, HttpClient httpClient) : base(logger, mediator, "Neko-Net Settings", performanceCollector)
     {
         _configService = configService;
         _pairManager = pairManager;
@@ -1940,7 +1940,7 @@ public class SettingsUi : WindowMediatorSubscriberBase
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted("Community and Support:");
         ImGui.SameLine();
-        if (ImGui.Button("Mare Synchronos Discord"))
+        if (ImGui.Button("Neko-Net Discord"))
         {
             Util.OpenLink("https://discord.gg/mpNdkrTRjW");
         }

@@ -36,7 +36,7 @@ public sealed class MareSecretKey
 public sealed class MareAuth
 {
     public string CharacterName { get; set; } = "";
-    public int WorldId { get; set; }
+    public uint WorldId { get; set; }
     public int SecretKeyIdx { get; set; }
     public string? UID { get; set; }
     public bool AutoLogin { get; set; }

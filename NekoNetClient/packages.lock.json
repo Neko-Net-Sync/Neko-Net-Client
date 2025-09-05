@@ -175,6 +175,11 @@
           "Microsoft.IdentityModel.Tokens": "8.7.0"
         }
       },
+      "JetBrains.Annotations": {
+        "type": "Transitive",
+        "resolved": "2024.3.0",
+        "contentHash": "ox5pkeLQXjvJdyAB4b2sBYAlqZGLh3PjSnP1bQNVx72ONuTJ9+34/+Rq91Fc0dG29XG9RgZur9+NcP4riihTug=="
+      },
       "K4os.Compression.LZ4": {
         "type": "Transitive",
         "resolved": "1.3.8",
@@ -526,6 +531,13 @@
         "dependencies": {
           "MessagePack.Annotations": "[3.1.3, )",
           "Microsoft.Extensions.Logging.Abstractions": "[8.0.1, )"
+        }
+      },
+      "ottergui": {
+        "type": "Project",
+        "dependencies": {
+          "JetBrains.Annotations": "[2024.3.0, )",
+          "Microsoft.Extensions.DependencyInjection": "[9.0.2, )"
         }
       }
     }

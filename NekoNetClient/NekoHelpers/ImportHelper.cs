@@ -28,6 +28,8 @@ public sealed class ImportHelper
         {
             Path.Combine(appData, "XIVLauncher", "pluginConfigs", "OpenSynchronos"),
             Path.Combine(appData, "XIVLauncher", "pluginConfigs", "NekoNetClient"),
+            Path.Combine(appData, "XIVLauncher", "pluginConfigs", "MareSynchronos"),
+            Path.Combine(appData, "XIVLauncher", "pluginConfigs", "TerasyncV2"),
         }.Where(Directory.Exists)
          .Select(p => new DirectoryInfo(p))
          .OrderByDescending(d => d.LastWriteTimeUtc)

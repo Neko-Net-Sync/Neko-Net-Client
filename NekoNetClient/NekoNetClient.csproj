@@ -62,6 +62,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\NekoNetAPI\NekoNetAPI\NekoNet.API.csproj" />
+		<ProjectReference Include="..\OtterGui\OtterGui.csproj" />
 	</ItemGroup>
 
   <ItemGroup>
