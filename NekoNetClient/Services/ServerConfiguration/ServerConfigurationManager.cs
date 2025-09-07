@@ -6,6 +6,7 @@ using NekoNetClient.MareConfiguration;
 using NekoNetClient.MareConfiguration.Models;
 using NekoNetClient.Services.Mediator;
 using NekoNetClient.WebAPI.SignalR;
+using Serilog.Core;
 using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net.Http.Json;
@@ -39,7 +40,27 @@ public class ServerConfigurationManager
         _mareMediator = mareMediator;
         EnsureMainExists();
     }
+    public string GetApiEndpointForDomain(string serverUri)
+    {
+        try
+        {
+            var uri = new Uri(serverUri);
+            var domain = uri.Host.ToLowerInvariant();
 
+            return domain switch
+            {
+                "connect.neko-net.cc" => "/mare",
+                "sync.lightless-sync.org" => "/lightless",
+                "tera.terasync.app" => "/tera-sync-v2",
+                _ => "/mare" // Default endpoint
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse domain from {uri}, using default endpoint", serverUri);
+            return "/mare";
+        }
+    }
     public string CurrentApiUrl => CurrentServer.ServerUri;
     public ServerStorage CurrentServer => _configService.Current.ServerStorage[CurrentServerIndex];
     public bool SendCensusData

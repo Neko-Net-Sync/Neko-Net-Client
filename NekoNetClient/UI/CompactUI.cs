@@ -54,6 +54,9 @@ public class CompactUi : WindowMediatorSubscriberBase
     private bool _wasOpen;
     private float _windowContentWidth;
 
+    // ▼ NEW: server picker state
+    private int _serverPickerIndex = -1;
+
     public CompactUi(ILogger<CompactUi> logger, UiSharedService uiShared, MareConfigService configService, ApiController apiController, PairManager pairManager,
         ServerConfigurationManager serverManager, MareMediator mediator, FileUploadManager fileTransferManager,
         TagHandler tagHandler, DrawEntityFactory drawEntityFactory, SelectTagForPairUi selectTagForPairUi, SelectPairForTagUi selectPairForTagUi,
@@ -65,6 +68,7 @@ public class CompactUi : WindowMediatorSubscriberBase
         _apiController = apiController;
         _pairManager = pairManager;
         _serverManager = serverManager;
+        _serverPickerIndex = _serverManager.CurrentServerIndex;
         _fileTransferManager = fileTransferManager;
         _tagHandler = tagHandler;
         _drawEntityFactory = drawEntityFactory;
@@ -72,6 +76,9 @@ public class CompactUi : WindowMediatorSubscriberBase
         _selectPairsForGroupUi = selectPairForTagUi;
         _ipcManager = ipcManager;
         _tabMenu = new TopTabMenu(Mediator, _apiController, _pairManager, _uiSharedService);
+
+        // ▼ NEW: initialize server picker index against current selection
+        _serverPickerIndex = _serverManager.CurrentServerIndex;
 
         AllowPinning = false;
         AllowClickthrough = false;
@@ -88,7 +95,7 @@ public class CompactUi : WindowMediatorSubscriberBase
                 ShowTooltip = () =>
                 {
                     ImGui.BeginTooltip();
-                    ImGui.Text("Open Mare Settings");
+                    ImGui.Text("Open Neko-Net Settings");
                     ImGui.EndTooltip();
                 }
             },
@@ -103,7 +110,7 @@ public class CompactUi : WindowMediatorSubscriberBase
                 ShowTooltip = () =>
                 {
                     ImGui.BeginTooltip();
-                    ImGui.Text("Open Mare Event Viewer");
+                    ImGui.Text("Open Neko-Net Event Viewer");
                     ImGui.EndTooltip();
                 }
             }
@@ -258,8 +265,12 @@ public class CompactUi : WindowMediatorSubscriberBase
 
         ImGui.EndChild();
     }
+
     private void DrawServerStatus()
     {
+        // ▼ NEW: server picker and current service label at the top of the status block
+        DrawServerPickerInline();
+
         var buttonSize = _uiSharedService.GetIconButtonSize(FontAwesomeIcon.Link);
         var userCount = _apiController.OnlineUsers.ToString(CultureInfo.InvariantCulture);
         var userSize = ImGui.CalcTextSize(userCount);
@@ -637,4 +648,74 @@ public class CompactUi : WindowMediatorSubscriberBase
         _wasOpen = IsOpen;
         IsOpen = false;
     }
+
+    // ▼ NEW: helpers for server picker + current service label
+    private string GetCurrentServiceLabel()
+    {
+        var baseHttp = _serverManager.CurrentApiUrl
+            .Replace("wss://", "https://", System.StringComparison.OrdinalIgnoreCase)
+            .Replace("ws://",  "http://",  System.StringComparison.OrdinalIgnoreCase);
+
+        string host;
+        try { host = new System.Uri(baseHttp).Host; }
+        catch { host = _serverManager.CurrentServer.ServerUri; }
+
+        var path = _serverManager.CurrentServer.ApiEndpoint;
+        if (string.IsNullOrEmpty(path)) path = "/mare";
+        if (!path.StartsWith('/')) path = "/" + path;
+
+        return $"{host}{path}";
+    }
+
+    private void DrawServerPickerInline()
+    {
+        var serverNames = _serverManager.GetServerNames();
+        var count = serverNames?.Length ?? 0;
+        if (count == 0) return;
+
+        if (_serverPickerIndex < 0 || _serverPickerIndex >= count)
+        {
+            _serverPickerIndex = _serverManager.CurrentServerIndex;
+            if (_serverPickerIndex < 0) _serverPickerIndex = 0;
+            if (_serverPickerIndex >= count) _serverPickerIndex = count - 1;
+        }
+
+        // left side: label + combo
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted("Server");
+        ImGui.SameLine();
+
+        ImGui.PushItemWidth(180f * ImGuiHelpers.GlobalScale);
+        var currentName = serverNames[_serverPickerIndex];
+        if (ImGui.BeginCombo("##serverPicker", currentName))
+        {
+            for (int i = 0; i < count; i++)
+            {
+                bool selected = i == _serverPickerIndex;
+                if (ImGui.Selectable(serverNames[i], selected))
+                {
+                    _serverPickerIndex = i;
+                    _serverManager.SelectServer(i);
+                    _serverManager.Save();
+                    _ = _apiController.CreateConnectionsAsync();
+                }
+                if (selected) ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.PopItemWidth();
+
+        // status icon + current service label (click to copy)
+        ImGui.SameLine();
+        _uiSharedService.BooleanToColoredIcon(_apiController.ServerState is ServerState.Connected, true);
+        ImGui.SameLine();
+
+        var label = GetCurrentServiceLabel();
+        ImGui.TextDisabled($"Service: {label}");
+        if (ImGui.IsItemHovered()) UiSharedService.AttachToolTip("Click to copy");
+        if (ImGui.IsItemClicked()) ImGui.SetClipboardText(label);
+
+        ImGui.Spacing();
+    }
+
 }

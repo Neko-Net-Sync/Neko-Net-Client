@@ -14,4 +14,5 @@ public class ServerStorage
     public string? OAuthToken { get; set; } = null;
     public HttpTransportType HttpTransportType { get; set; } = HttpTransportType.WebSockets;
     public bool ForceWebSockets { get; set; } = false;
+    public string? ApiEndpoint { get; set; }
 }

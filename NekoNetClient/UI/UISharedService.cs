@@ -864,6 +864,17 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
             if (_serverSelectionIndex == _serverConfigurationManager.CurrentServerIndex) text = "Reconnect";
             if (IconTextButton(FontAwesomeIcon.Link, text))
             {
+                // Check and set the API endpoint before connecting
+                var selectedServer = _serverConfigurationManager.GetServerByIndex(_serverSelectionIndex);
+                var detectedEndpoint = _serverConfigurationManager.GetApiEndpointForDomain(selectedServer.ServerUri);
+
+                // Only update if not already set or if different
+                if (selectedServer.ApiEndpoint != detectedEndpoint)
+                {
+                    selectedServer.ApiEndpoint = detectedEndpoint;
+                    _serverConfigurationManager.Save();
+                }
+
                 _serverConfigurationManager.SelectServer(_serverSelectionIndex);
                 _ = _apiController.CreateConnectionsAsync();
             }
@@ -1140,6 +1151,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
 
         return result;
     }
+  
     public sealed record IconScaleData(Vector2 IconSize, Vector2 NormalizedIconScale, float OffsetX, float IconScaling);
     private record UIDAliasPair(string? UID, string? Alias);
 }
