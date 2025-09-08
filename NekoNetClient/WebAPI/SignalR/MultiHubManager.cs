@@ -19,24 +19,37 @@ namespace NekoNetClient.WebAPI.SignalR
         private readonly TokenProvider _tokens;
 
         private readonly ConcurrentDictionary<SyncService, HubConnection> _hubs = new();
+        private readonly ConcurrentDictionary<SyncService, string> _lastError = new();
         private bool _disposed;
 
         // ─────────────────────────────────────────────────────────────────────────────
         // Service endpoints map.
-        // - If Path is absolute (wss://, ws://, https://, http://), it is used as-is.
+        // - If Endpoint is absolute (wss://, ws://, https://, http://), it is used as-is.
         // - If Subdomain is null, we keep CurrentApiUrl's host.
         // - If Subdomain is set, we replace the left-most label in the host.
-        // Adjust these three lines to your infra.
-        // MultiHubManager.cs
-        private sealed record ServiceSpec(string? Subdomain, string Endpoint, bool UseMareToken, bool WebSocketsOnly);
+        // - UseMareToken controls whether the Mare bearer token is sent.
+        // - WebSocketsOnly forces WS and SkipNegotiation.
+        private sealed record ServiceSpec(
+            string? Subdomain,
+            string Endpoint,
+            bool UseMareToken,
+            bool WebSocketsOnly
+        );
+        // Optional per-service token provider (returns the token string to send)
+        private readonly ConcurrentDictionary<SyncService, Func<CancellationToken, Task<string?>>>
+            _customTokenProviders = new();
 
-        private static readonly Dictionary<SyncService, ServiceSpec> ServiceMap = new()
-        {
-            [SyncService.NekoNet] = new(null, "/mare", UseMareToken: true, WebSocketsOnly: false),
-            [SyncService.Lightless] = new(null, "wss://sync.lightless-sync.org/lightless", UseMareToken: false, WebSocketsOnly: true),
-            [SyncService.TeraSync] = new(null, "wss://tera.terasync.app/tera-sync-v2", UseMareToken: false, WebSocketsOnly: true),
-        };
+        // You can set this from anywhere that resolves MultiHubManager (e.g., your settings UI code)
+        public void SetCustomTokenProvider(SyncService svc, Func<CancellationToken, Task<string?>> provider)
+            => _customTokenProviders[svc] = provider;
 
+        // Adjust to your infra as needed.
+        private static readonly Dictionary<SyncService, ServiceSpec> ServiceMap =
+            new Dictionary<SyncService, ServiceSpec>
+            {
+                { SyncService.NekoNet,   new ServiceSpec(null, "/mare",                                   UseMareToken: true,  WebSocketsOnly: true) },
+                { SyncService.Lightless, new ServiceSpec(null, "wss://sync.lightless-sync.org", UseMareToken: true,  WebSocketsOnly: true)  },
+                { SyncService.TeraSync,  new ServiceSpec(null, "wss://tera.terasync.app/tera-sync-v2", UseMareToken: true, WebSocketsOnly: true) },            };
         // ─────────────────────────────────────────────────────────────────────────────
 
         public MultiHubManager(
@@ -57,7 +70,10 @@ namespace NekoNetClient.WebAPI.SignalR
         public HubConnectionState GetState(SyncService svc) =>
             _hubs.TryGetValue(svc, out var hub) ? hub.State : HubConnectionState.Disconnected;
 
-        public string GetResolvedUrl(SyncService svc) => ResolveUrl(svc);
+        public string? GetLastError(SyncService svc) =>
+            _lastError.TryGetValue(svc, out var e) ? e : null;
+
+        public string GetResolvedUrl(SyncService svc) => ResolveUrlAndSpec(svc).url;
 
         public async Task ConnectAsync(params SyncService[] services)
         {
@@ -66,15 +82,42 @@ namespace NekoNetClient.WebAPI.SignalR
                 var hub = _hubs.GetOrAdd(svc, _ => Build(svc, CancellationToken.None));
                 if (hub.State == HubConnectionState.Disconnected)
                 {
-                    var url = GetResolvedUrl(svc);
-                    _log.LogInformation("Connecting {svc} -> {url}", svc, url);
+                    var (url, spec) = ResolveUrlAndSpec(svc);
+
+                    // Debug token information
+                    if (spec.UseMareToken || _customTokenProviders.ContainsKey(svc))
+                    {
+                        try
+                        {
+                            string? token = null;
+                            if (_customTokenProviders.TryGetValue(svc, out var customProvider))
+                            {
+                                token = await customProvider(CancellationToken.None);
+                                _log.LogDebug("Using custom token for {svc}: {tokenPrefix}...", svc, token?.Substring(0, Math.Min(10, token?.Length ?? 0)) ?? "null");
+                            }
+                            else if (spec.UseMareToken)
+                            {
+                                token = await _tokens.GetOrUpdateToken(CancellationToken.None);
+                                _log.LogDebug("Using Mare token for {svc}: {tokenPrefix}...", svc, token?.Substring(0, Math.Min(10, token?.Length ?? 0)) ?? "null");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _log.LogWarning(ex, "Failed to get token for {svc}", svc);
+                        }
+                    }
+
+                    _log.LogInformation("Connecting {svc} -> {url} (UseMareToken={auth}, WSOnly={ws})",
+                        svc, url, spec.UseMareToken, spec.WebSocketsOnly);
                     try
                     {
                         await hub.StartAsync().ConfigureAwait(false);
+                        _lastError.TryRemove(svc, out _);
                         _log.LogInformation("{svc} connected. State={state}", svc, hub.State);
                     }
                     catch (Exception ex)
                     {
+                        _lastError[svc] = ex.Message;
                         _log.LogError(ex, "Failed to connect {svc} to {url}", svc, url);
                         throw;
                     }
@@ -105,80 +148,93 @@ namespace NekoNetClient.WebAPI.SignalR
 
         private HubConnection Build(SyncService svc, CancellationToken ct)
         {
-            var url = ResolveUrl(svc);
+            var (url, spec) = ResolveUrlAndSpec(svc);
 
-            var transport = _servers.CurrentServer.ForceWebSockets
+            var transports = spec.WebSocketsOnly
                 ? HttpTransportType.WebSockets
                 : _servers.CurrentServer.HttpTransportType;
 
             var builder = new HubConnectionBuilder()
                 .WithUrl(url, options =>
                 {
-                    options.AccessTokenProvider = () => _tokens.GetOrUpdateToken(ct);
-                    options.Transports = transport;
+                    options.Transports = transports;
+                    options.SkipNegotiation = spec.WebSocketsOnly;
+
+                    // Check for custom token provider first
+                    if (_customTokenProviders.TryGetValue(svc, out var customProvider))
+                    {
+                        options.AccessTokenProvider = () => customProvider(ct);
+                        _log.LogDebug("Using custom token provider for {svc}", svc);
+                    }
+                    // Fall back to Mare token if configured
+                    else if (spec.UseMareToken)
+                    {
+                        options.AccessTokenProvider = () => _tokens.GetOrUpdateToken(ct);
+                        _log.LogDebug("Using Mare token provider for {svc}", svc);
+                    }
+                    // No authentication
+                    else
+                    {
+                        options.AccessTokenProvider = null;
+                        _log.LogDebug("No authentication configured for {svc}", svc);
+                    }
                 })
                 .AddMessagePackProtocol()
                 .WithAutomaticReconnect();
 
             var hub = builder.Build();
 
-            hub.Closed += async (ex) =>
+            hub.Closed += ex =>
             {
+                if (ex != null) _lastError[svc] = ex.Message;
                 _log.LogWarning(ex, "{svc} hub closed (auto-reconnect will handle).", svc);
-                await Task.CompletedTask;
+                return Task.CompletedTask;
             };
-            hub.Reconnecting += (ex) =>
+            hub.Reconnecting += ex =>
             {
+                if (ex != null) _lastError[svc] = ex.Message;
                 _log.LogInformation(ex, "{svc} hub reconnecting…", svc);
                 return Task.CompletedTask;
             };
-            hub.Reconnected += (id) =>
+            hub.Reconnected += id =>
             {
+                _lastError.TryRemove(svc, out _);
                 _log.LogInformation("{svc} hub reconnected: ConnId={id}", svc, id);
                 return Task.CompletedTask;
             };
 
-            // Register per-hub handlers here if needed
-            // if (svc == SyncService.Lightless) hub.On<string>("LightlessEvent", payload => { … });
-
             return hub;
         }
 
-        private string ResolveUrl(SyncService svc)
+        private (string url, ServiceSpec spec) ResolveUrlAndSpec(SyncService svc)
         {
-            var (sub, raw) = ServiceMap[svc];
-            raw = raw?.Trim() ?? string.Empty;
+            var spec = ServiceMap[svc];
+            var raw = (spec.Endpoint ?? string.Empty).Trim();
 
-            // Absolute override (used as-is)
+            // Absolute override (use as-is)
             if (raw.StartsWith("wss://", StringComparison.OrdinalIgnoreCase) ||
                 raw.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) ||
                 raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
                 raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
             {
-                return raw;
+                return (raw, spec);
             }
 
-            // Relative: build from current API URL
+            // Relative: build from CurrentApiUrl (and optional subdomain)
             var path = NormalizePath(raw);
             var baseUrl = _servers.CurrentApiUrl; // e.g., wss://connect.neko-net.cc
 
             if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
-                return baseUrl.TrimEnd('/') + path; // fallback
+                return (baseUrl.TrimEnd('/') + path, spec);
 
             // Optional subdomain swap
             var host = baseUri.Host; // connect.neko-net.cc
-            if (!string.IsNullOrWhiteSpace(sub))
+            if (!string.IsNullOrWhiteSpace(spec.Subdomain))
             {
                 var parts = host.Split('.');
-                if (parts.Length >= 3)
-                {
-                    parts[0] = sub; // connect -> lightless/tera/etc
-                    host = string.Join('.', parts);
-                }
-                else
-                {
-                    host = $"{sub}.{host}";
-                }
+                host = parts.Length >= 3
+                    ? string.Join('.', spec.Subdomain, string.Join('.', parts.AsSpan(1)))
+                    : $"{spec.Subdomain}.{host}";
             }
 
             var builder = new UriBuilder(baseUri)
@@ -187,14 +243,11 @@ namespace NekoNetClient.WebAPI.SignalR
                 Path = path
             };
 
-            return builder.Uri.ToString();
+            return (builder.Uri.ToString(), spec);
         }
 
         private static string NormalizePath(string p)
-        {
-            if (string.IsNullOrWhiteSpace(p)) return "/mare";
-            return p[0] == '/' ? p : "/" + p;
-        }
+            => string.IsNullOrWhiteSpace(p) ? "/mare" : (p[0] == '/' ? p : "/" + p);
 
         public async ValueTask DisposeAsync()
         {
