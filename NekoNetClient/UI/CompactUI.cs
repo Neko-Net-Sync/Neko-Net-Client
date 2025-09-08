@@ -4,6 +4,7 @@ using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Utility;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data.Extensions;
 using NekoNet.API.Dto.Group;
@@ -20,13 +21,13 @@ using NekoNetClient.WebAPI.Files;
 using NekoNetClient.WebAPI.Files.Models;
 using NekoNetClient.WebAPI.SignalR;
 using NekoNetClient.WebAPI.SignalR.Utils;
+using Serilog.Core;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Numerics;
 using System.Reflection;
-using System.Collections.Generic;
-
 
 namespace NekoNetClient.UI;
 
@@ -65,7 +66,7 @@ public class CompactUi : WindowMediatorSubscriberBase
     public CompactUi(ILogger<CompactUi> logger, UiSharedService uiShared, MareConfigService configService, ApiController apiController, PairManager pairManager,
         ServerConfigurationManager serverManager, MareMediator mediator, FileUploadManager fileTransferManager,
         TagHandler tagHandler, DrawEntityFactory drawEntityFactory, SelectTagForPairUi selectTagForPairUi, SelectPairForTagUi selectPairForTagUi,
-        PerformanceCollectorService performanceCollectorService, IpcManager ipcManager, MultiHubManager multiHub )
+        PerformanceCollectorService performanceCollectorService, IpcManager ipcManager, MultiHubManager multiHub)
         : base(logger, mediator, "###Neko-NetMainUI", performanceCollectorService)
     {
         _uiSharedService = uiShared;
@@ -84,7 +85,7 @@ public class CompactUi : WindowMediatorSubscriberBase
 
         // ▼ NEW: initialize server picker index against current selection
         _multiHub = multiHub;
-        _attachedServices.Add(SyncService.NekoNet);
+       // _attachedServices.Add(SyncService.NekoNet);
         _serverPickerIndex = _serverManager.CurrentServerIndex;
 
         AllowPinning = false;
@@ -337,11 +338,13 @@ public class CompactUi : WindowMediatorSubscriberBase
                     {
                         _serverManager.CurrentServer.FullPause = true;
                         _serverManager.Save();
+                        _ = _multiHub.DisconnectAsync(_attachedServices.ToArray());
                     }
                     else if (!isConnectingOrConnected && _serverManager.CurrentServer.FullPause)
                     {
                         _serverManager.CurrentServer.FullPause = false;
                         _serverManager.Save();
+                        _ = _multiHub.ConnectAsync(_attachedServices.ToArray());
                     }
 
                     _ = _apiController.CreateConnectionsAsync();
@@ -490,7 +493,6 @@ public class CompactUi : WindowMediatorSubscriberBase
         bool FilterOfflineSyncshellUsers(KeyValuePair<Pair, List<GroupFullInfoDto>> u)
             => (!u.Key.IsDirectlyPaired && !u.Key.IsOnline && !u.Key.UserPair.OwnPermissions.IsPaused());
 
-
         if (_configService.Current.ShowVisibleUsersSeparately)
         {
             var allVisiblePairs = ImmutablePairList(allPairs
@@ -577,6 +579,17 @@ public class CompactUi : WindowMediatorSubscriberBase
 
         return drawFolders;
     }
+    private (string label, Vector4 color) ChipStateVisual(SyncService svc)
+    {
+        var st = _multiHub.GetState(svc);
+        return st switch
+        {
+            HubConnectionState.Connected => ("●", ImGuiColors.ParsedGreen),
+            HubConnectionState.Connecting => ("◐", ImGuiColors.DalamudYellow),
+            HubConnectionState.Reconnecting => ("◒", ImGuiColors.DalamudYellow),
+            _ => ("○", ImGuiColors.DalamudGrey2),
+        };
+    }
 
     private string GetServerError()
     {
@@ -661,7 +674,7 @@ public class CompactUi : WindowMediatorSubscriberBase
     {
         var baseHttp = _serverManager.CurrentApiUrl
             .Replace("wss://", "https://", System.StringComparison.OrdinalIgnoreCase)
-            .Replace("ws://",  "http://",  System.StringComparison.OrdinalIgnoreCase);
+            .Replace("ws://", "http://", System.StringComparison.OrdinalIgnoreCase);
 
         string host;
         try { host = new System.Uri(baseHttp).Host; }
@@ -722,7 +735,92 @@ public class CompactUi : WindowMediatorSubscriberBase
         if (ImGui.IsItemHovered()) UiSharedService.AttachToolTip("Click to copy");
         if (ImGui.IsItemClicked()) ImGui.SetClipboardText(label);
 
+        // ▼ NEW: service chips row
+        ImGui.SameLine();
+        ImGui.Spacing();
+        DrawServiceChipsRow();
         ImGui.Spacing();
     }
 
+    // ▼ NEW: chips, toggles, and helpers
+    private void DrawServiceChipsRow()
+    {
+        DrawServiceChip(SyncService.NekoNet, "NekoNet");
+        ImGui.SameLine();
+        DrawServiceChip(SyncService.Lightless, "Lightless");
+        ImGui.SameLine();
+        DrawServiceChip(SyncService.TeraSync, "TeraSync");
+    }
+
+    private void DrawServiceChip(SyncService svc, string label)
+    {
+        using (ImRaii.PushId(label))
+        {
+            var attached = IsAttached(svc);
+            var (dot, dotColor) = ChipStateVisual(svc);
+
+            // pill button
+            var pad = new Vector2(6 * ImGuiHelpers.GlobalScale, 4 * ImGuiHelpers.GlobalScale);
+            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, pad);
+            ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 10f * ImGuiHelpers.GlobalScale);
+            var bg = attached
+                ? ImGuiColors.ParsedGreen * new Vector4(1, 1, 1, 0.12f)
+                : ImGuiColors.DalamudGrey3 * new Vector4(1, 1, 1, 0.10f);
+            ImGui.PushStyleColor(ImGuiCol.Button, bg);
+
+            var clicked = ImGui.Button(label);
+
+            ImGui.PopStyleColor();
+            ImGui.PopStyleVar(2);
+
+            ImGui.SameLine(0, 6 * ImGuiHelpers.GlobalScale);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(dotColor, dot);
+
+            if (ImGui.IsItemHovered())
+            {
+                var url = _multiHub.GetResolvedUrl(svc);
+                var st = _multiHub.GetState(svc);
+                UiSharedService.AttachToolTip($"{attached switch { true => "Detach", _ => "Attach" }} {label}\n" +
+                                              $"State: {st}\n" +
+                                              $"URL:   {url}");
+            }
+
+            if (clicked)
+                ToggleService(svc, !attached);
+        }
+    }
+
+
+    private async void ToggleService(SyncService svc, bool attach)
+    {
+        try
+        {
+            // main session must be connected (token ready)
+            if (attach && _apiController.ServerState is not ServerState.Connected)
+            {
+                _logger.LogWarning("Tried to attach {svc} while main session is not Connected (state={state}).", svc, _apiController.ServerState);
+                // You can show a soft toast here if you want
+                return;
+            }
+
+            if (attach)
+            {
+                if (_attachedServices.Add(svc))
+                    await _multiHub.ConnectAsync(svc).ConfigureAwait(false);
+            }
+            else
+            {
+                if (_attachedServices.Remove(svc))
+                    await _multiHub.DisconnectAsync(svc).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to toggle {svc} (attach={attach})", svc, attach);
+        }
+    }
+
+
+    private bool IsAttached(SyncService svc) => _attachedServices.Contains(svc);
 }
