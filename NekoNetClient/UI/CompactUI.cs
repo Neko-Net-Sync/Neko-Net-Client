@@ -25,6 +25,8 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Numerics;
 using System.Reflection;
+using System.Collections.Generic;
+
 
 namespace NekoNetClient.UI;
 
@@ -54,13 +56,16 @@ public class CompactUi : WindowMediatorSubscriberBase
     private bool _wasOpen;
     private float _windowContentWidth;
 
+    private readonly MultiHubManager _multiHub;
+    private readonly HashSet<SyncService> _attachedServices = new();
+
     // ▼ NEW: server picker state
     private int _serverPickerIndex = -1;
 
     public CompactUi(ILogger<CompactUi> logger, UiSharedService uiShared, MareConfigService configService, ApiController apiController, PairManager pairManager,
         ServerConfigurationManager serverManager, MareMediator mediator, FileUploadManager fileTransferManager,
         TagHandler tagHandler, DrawEntityFactory drawEntityFactory, SelectTagForPairUi selectTagForPairUi, SelectPairForTagUi selectPairForTagUi,
-        PerformanceCollectorService performanceCollectorService, IpcManager ipcManager)
+        PerformanceCollectorService performanceCollectorService, IpcManager ipcManager, MultiHubManager multiHub )
         : base(logger, mediator, "###Neko-NetMainUI", performanceCollectorService)
     {
         _uiSharedService = uiShared;
@@ -78,6 +83,8 @@ public class CompactUi : WindowMediatorSubscriberBase
         _tabMenu = new TopTabMenu(Mediator, _apiController, _pairManager, _uiSharedService);
 
         // ▼ NEW: initialize server picker index against current selection
+        _multiHub = multiHub;
+        _attachedServices.Add(SyncService.NekoNet);
         _serverPickerIndex = _serverManager.CurrentServerIndex;
 
         AllowPinning = false;

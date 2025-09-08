@@ -89,6 +89,7 @@ public sealed class Plugin : IDalamudPlugin
             collection.AddSingleton(new WindowSystem("Neko-Net"));
             collection.AddSingleton<FileDialogManager>();
             collection.AddSingleton(new Dalamud.Localization("Neko-Net.Localization.", "", useEmbedded: true));
+            collection.AddSingleton<MultiHubManager>();  
 
             // add mare related singletons
             collection.AddSingleton<MareMediator>();
