@@ -2,11 +2,3 @@
 	url = https://github.com/Neko-Net-Sync/NekoNetAPI.git
 	path = NekoNetAPI
 	branch = main
-
-[submodule "OtterGui"]
-	path = OtterGui
-	url = https://github.com/Ottermandias/OtterGui.git
-	branch = main
-[submodule "extern/LightlessAPI"]
-	path = extern/LightlessAPI
-	url = https://github.com/Light-Public-Syncshells/LightlessAPI
