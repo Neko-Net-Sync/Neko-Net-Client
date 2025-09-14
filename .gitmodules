@@ -1,0 +1,4 @@
+[submodule "NekoNetAPI"]
+	url = https://github.com/Neko-Net-Sync/NekoNetAPI.git
+	path = NekoNetAPI
+	branch = main
