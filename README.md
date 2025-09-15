@@ -1,6 +1,8 @@
 # Neko Net Dalamud Plugin
 
-This is an attempt at making a client that is capable of connecting to multiple mare/forks/clone services synchronously (lol) 
+This is an attempt at making a client that is capable of connecting to multiple mare/forks/clone services synchronously (lol) instead of running 5 different clients. 
+
+The idea is you use this single client to connect to multiple servers. (STILL A WIP)
 
 At this point in time:
 
