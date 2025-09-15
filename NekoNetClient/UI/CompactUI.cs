@@ -751,10 +751,10 @@ public class CompactUi : WindowMediatorSubscriberBase
         if (ImGui.IsItemClicked()) ImGui.SetClipboardText(label);
 
         // ▼ NEW: service chips row
-        ImGui.SameLine();
-        ImGui.Spacing();
-        DrawServiceChipsRow();
-        ImGui.Spacing();
+        // ImGui.SameLine();
+        // ImGui.Spacing();
+        // DrawServiceChipsRow();
+        // ImGui.Spacing();
     }
 
     // ▼ NEW: chips, toggles, and helpers

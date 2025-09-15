@@ -3,6 +3,7 @@ using Dalamud.Interface.Colors;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Interface;
 using Dalamud.Utility;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.FileCache;
@@ -31,6 +32,32 @@ public partial class IntroUi : WindowMediatorSubscriberBase
     private readonly FileDialogManager _fileDialogManager;
     // Holds folders found by "Auto-detect Mare Folders"
     private readonly List<string> _autoDetected = new();
+    // Holds results for multi-source import
+    private readonly List<ImportWizard.ScanResult> _scanList = new();
+    // Selection state for auto-detected folders
+    private readonly Dictionary<string, bool> _autoDetectedChecked = new(StringComparer.OrdinalIgnoreCase);
+
+    private void UpdateSuggestedCacheFromScans()
+    {
+        try
+        {
+            var best = _scanList
+                .Select(sc => new { Scan = sc, Path = sc.SuggestedCacheFolder ?? string.Empty, Time = new DirectoryInfo(sc.SourceFolder).LastWriteTimeUtc })
+                .Where(x => !string.IsNullOrWhiteSpace(x.Path))
+                .OrderByDescending(x => x.Time)
+                .FirstOrDefault();
+
+            if (best != null)
+            {
+                _cachePathOverride = best.Path;
+                _reuseCache = best.Scan.FileCacheExists && !string.IsNullOrWhiteSpace(_cachePathOverride);
+            }
+        }
+        catch
+        {
+            // ignore issues computing suggestion
+        }
+    }
 
     private int _currentLanguage;
     private bool _readFirstPage;
@@ -112,6 +139,372 @@ public partial class IntroUi : WindowMediatorSubscriberBase
 
         if (!_configService.Current.AcceptedAgreement && !_readFirstPage)
         {
+            // Redesigned first page with cleaner layout and multi-config import
+            _uiShared.BigText("Welcome to Neko-Net");
+            ImGui.Separator();
+            using (var table = ImRaii.Table("intro_layout_table", 2, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.BordersInnerV))
+            {
+                if (table)
+                {
+                    // Left: description and requirements
+                    ImGui.TableNextColumn();
+                    UiSharedService.TextWrapped("Neko-Net replicates your full current character state, including all Penumbra mods, to other paired Neko-Net users.");
+                    UiSharedService.TextWrapped("Penumbra and Glamourer are required to use this plugin.");
+                    UiSharedService.TextWrapped("We’ll guide you through a quick setup to get started.");
+                    ImGuiHelpers.ScaledDummy(6f);
+                    UiSharedService.ColorTextWrapped("Note: Changes applied with tools other than Penumbra cannot be shared reliably. For best results, move your mods to Penumbra.", ImGuiColors.DalamudYellow);
+                    ImGuiHelpers.ScaledDummy(6f);
+                    if (!_uiShared.DrawOtherPluginState()) return;
+
+                    // Right: quick actions
+                    ImGui.TableNextColumn();
+                    UiSharedService.DrawGrouped(() =>
+                    {
+                        ImGui.TextUnformatted("Get Started");
+                        ImGui.Separator();
+                        if (_uiShared.IconTextButton(FontAwesomeIcon.FolderOpen, "Import from Folder..."))
+                        {
+                            _showImportModal = true;
+                            _importPath = string.Empty;
+                            _scan = null;
+                            _autoDetected.Clear();
+                        }
+                        UiSharedService.AttachToolTip("Add one or more config folders and import selected servers.");
+                        ImGuiHelpers.ScaledDummy(4f);
+                        if (_uiShared.IconTextButton(FontAwesomeIcon.ArrowRight, "Next"))
+                        {
+                            _readFirstPage = true;
+#if !DEBUG
+                            _timeoutTask = Task.Run(async () =>
+                            {
+                                for (int i = 60; i > 0; i--)
+                                {
+                                    _timeoutLabel = $"{Strings.ToS.ButtonWillBeAvailableIn} {i}s";
+                                    await Task.Delay(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                                }
+                            });
+#else
+                            _timeoutTask = Task.CompletedTask;
+#endif
+                        }
+                    }, rounding: 6f, expectedWidth: 260f);
+                }
+            }
+
+            // Multi-source Import UI (non-modal window)
+            if (_showImportModal)
+            {
+                if (ImGui.IsWindowAppearing()) ImGui.SetNextWindowFocus();
+                ImGui.SetNextWindowSizeConstraints(new Vector2(620, 0), new Vector2(900, 1200));
+                if (ImGui.Begin("Import from Mare/OpenSynchronos", ref _showImportModal,
+                    ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoCollapse))
+                {
+                    var wizard = new ImportWizard(_configService, _serverConfigurationManager);
+                    // Quick scan on open if list is empty
+                    if (_autoDetected.Count == 0)
+                    {
+                        var appDataInit = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                        var pluginConfigsInit = Path.Combine(appDataInit, "XIVLauncher", "pluginConfigs");
+                        if (Directory.Exists(pluginConfigsInit))
+                        {
+                            _autoDetected.Clear();
+                            foreach (var dir in Directory.GetDirectories(pluginConfigsInit)
+                                         .Where(d => {
+                                             var name = Path.GetFileName(d).ToLowerInvariant();
+                                             return name.Contains("mare") || name.Contains("synchronos") || name.Contains("neko");
+                                         })
+                                         .Where(d => File.Exists(Path.Combine(d, "server.json")))
+                                         .OrderByDescending(d => new DirectoryInfo(d).LastWriteTimeUtc))
+                            {
+                                _autoDetected.Add(dir);
+                                if (!_autoDetectedChecked.ContainsKey(dir)) _autoDetectedChecked[dir] = true;
+                            }
+                            // remove stale entries
+                            foreach (var key in _autoDetectedChecked.Keys.ToList())
+                                if (!_autoDetected.Contains(key)) _autoDetectedChecked.Remove(key);
+                        }
+                        // After first populate, try to choose suggested cache
+                        if (_scanList.Count == 0)
+                        {
+                            // perform lightweight scans without reading files to avoid delays? we already need server.json existence; call ScanFolder for each preselected.
+                            foreach (var dir in _autoDetected)
+                            {
+                                try
+                                {
+                                    var sc = wizard.ScanFolder(dir);
+                                    if (string.IsNullOrEmpty(sc.Error))
+                                    {
+                                        // do not add yet; only use to pick cache suggestion
+                                        if (string.IsNullOrEmpty(_cachePathOverride) && !string.IsNullOrWhiteSpace(sc.SuggestedCacheFolder))
+                                            _cachePathOverride = sc.SuggestedCacheFolder;
+                                        if (sc.FileCacheExists && !string.IsNullOrWhiteSpace(_cachePathOverride)) _reuseCache = true;
+                                    }
+                                }
+                                catch { /* ignore */ }
+                            }
+                        }
+                    }
+
+                    ImGui.TextUnformatted("Add source folder(s) containing server.json (and optionally config.json / FileCache.csv)");
+                    ImGui.SetNextItemWidth(400);
+                    ImGui.InputTextWithHint("##importpath", "Select folder to add", ref _importPath);
+                    ImGui.SameLine();
+                    if (ImGui.Button("Browse..."))
+                        OpenFolderDialog();
+                    ImGui.SameLine();
+                    using (ImRaii.Disabled(string.IsNullOrWhiteSpace(_importPath)))
+                    {
+                        if (ImGui.Button("Add"))
+                        {
+                            try
+                            {
+                                var scan = wizard.ScanFolder(_importPath);
+                                if (string.IsNullOrEmpty(scan.Error))
+                                {
+                                    _scanList.Add(scan);
+                                    UpdateSuggestedCacheFromScans();
+                                }
+                                else
+                                {
+                                    _scan = scan; // keep last error visible
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _scan = new ImportWizard.ScanResult { SourceFolder = _importPath, Error = $"Scan failed: {ex.Message}" };
+                            }
+                        }
+                    }
+
+                    ImGui.TextUnformatted("Quick presets:");
+                    if (ImGui.Button("Mare Synchronos"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "MareSynchronos");
+                    ImGui.SameLine();
+                    if (ImGui.Button("OpenSynchronos"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "OpenSynchronos");
+                    ImGui.SameLine();
+                    if (ImGui.Button("Neko-Net"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "NekoNetClient");
+                    ImGui.SameLine();
+                    if (ImGui.Button("Tera Sync"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "TeraSyncV2");
+                    ImGui.SameLine();
+                    if (ImGui.Button("Lightless Sync"))
+                        _importPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "XIVLauncher", "pluginConfigs", "LightlessSync");
+
+                    if (ImGui.Button("Quick Scan"))
+                    {
+                        _autoDetected.Clear();
+                        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                        var pluginConfigs = Path.Combine(appData, "XIVLauncher", "pluginConfigs");
+                        if (Directory.Exists(pluginConfigs))
+                        {
+                            foreach (var dir in Directory.GetDirectories(pluginConfigs)
+                                         .Where(d => {
+                                             var name = Path.GetFileName(d).ToLowerInvariant();
+                                             return name.Contains("mare") || name.Contains("synchronos") || name.Contains("neko");
+                                         })
+                                         .Where(d => File.Exists(Path.Combine(d, "server.json")))
+                                         .OrderByDescending(d => new DirectoryInfo(d).LastWriteTimeUtc))
+                            {
+                                _autoDetected.Add(dir);
+                                if (!_autoDetectedChecked.ContainsKey(dir)) _autoDetectedChecked[dir] = true;
+                            }
+                            // cleanup stale
+                            foreach (var key in _autoDetectedChecked.Keys.ToList())
+                                if (!_autoDetected.Contains(key)) _autoDetectedChecked.Remove(key);
+                        }
+                    }
+
+                    if (_autoDetected is { Count: > 0 })
+                    {
+                        ImGui.Separator();
+                        ImGui.TextUnformatted("Found Mare-like folders (check and Add Selected):");
+                        ImGui.BeginChild("autodetect_list", new Vector2(0, 140), true);
+                        foreach (var folder in _autoDetected)
+                        {
+                            var name = Path.GetFileName(folder);
+                            var last = new DirectoryInfo(folder).LastWriteTimeUtc;
+                            var checkedVal = _autoDetectedChecked.TryGetValue(folder, out var v) && v;
+                            if (ImGui.Checkbox($"{name} (modified: {last:yyyy-MM-dd})", ref checkedVal))
+                                _autoDetectedChecked[folder] = checkedVal;
+                        }
+                        ImGui.EndChild();
+                        // Actions for detected list
+                        if (ImGui.SmallButton("Select All"))
+                        {
+                            foreach (var k in _autoDetected.ToList()) _autoDetectedChecked[k] = true;
+                        }
+                        ImGui.SameLine();
+                        if (ImGui.SmallButton("Clear"))
+                        {
+                            foreach (var k in _autoDetected.ToList()) _autoDetectedChecked[k] = false;
+                        }
+                        ImGui.SameLine();
+                        using (ImRaii.Disabled(!_autoDetected.Any(p => _autoDetectedChecked.TryGetValue(p, out var b) && b)))
+                        {
+                            if (ImGui.SmallButton("Add Selected"))
+                            {
+                                string? err = null;
+                                foreach (var folder in _autoDetected.Where(p => _autoDetectedChecked.TryGetValue(p, out var b) && b))
+                                {
+                                    if (_scanList.Any(s => string.Equals(s.SourceFolder, folder, StringComparison.OrdinalIgnoreCase))) continue;
+                                    try
+                                    {
+                                        var sc = wizard.ScanFolder(folder);
+                                        if (!string.IsNullOrEmpty(sc.Error)) err = (err == null ? "" : err + "\n") + $"{Path.GetFileName(folder)}: {sc.Error}"; else _scanList.Add(sc);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        err = (err == null ? "" : err + "\n") + $"{Path.GetFileName(folder)}: {ex.Message}";
+                                    }
+                                }
+                                UpdateSuggestedCacheFromScans();
+                                _scan = string.IsNullOrEmpty(err) ? null : new ImportWizard.ScanResult { Error = "Add failed for some folders:\n" + err };
+                            }
+                        }
+                    }
+
+                    ImGui.Separator();
+
+                    if (_scan != null && !string.IsNullOrEmpty(_scan.Error))
+                    {
+                        UiSharedService.ColorTextWrapped(_scan.Error, ImGuiColors.DalamudRed);
+                    }
+
+                    if (_scanList.Count > 0)
+                    {
+                        ImGui.Separator();
+                        ImGui.TextUnformatted("Added sources:");
+                        if (ImGui.BeginTable("added_sources", 3, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Borders))
+                        {
+                            ImGui.TableSetupColumn("Folder");
+                            ImGui.TableSetupColumn("Servers", ImGuiTableColumnFlags.WidthFixed, 70);
+                            ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 80);
+                            ImGui.TableHeadersRow();
+                            for (int s = 0; s < _scanList.Count; s++)
+                            {
+                                var sc = _scanList[s];
+                                ImGui.TableNextRow();
+                                ImGui.TableSetColumnIndex(0);
+                                ImGui.TextUnformatted(sc.SourceFolder);
+                                ImGui.TableSetColumnIndex(1);
+                                ImGui.TextUnformatted(sc.SourceServers.Count.ToString());
+                                ImGui.TableSetColumnIndex(2);
+                                if (ImGui.SmallButton($"Remove##src_{s}"))
+                                {
+                                    _scanList.RemoveAt(s);
+                                    s--; continue;
+                                }
+                            }
+                            ImGui.EndTable();
+                        }
+
+                        ImGui.Separator();
+                        ImGui.TextUnformatted("Cache folder to use:");
+                        ImGui.SetNextItemWidth(300);
+                        ImGui.InputTextWithHint("##cachePath", "Choose a cache folder (optional)", ref _cachePathOverride);
+                        ImGui.SameLine();
+                        if (ImGui.Button("Browse##cache")) OpenCacheFolderDialog();
+                        var anyHasFileCache = _scanList.Any(s => s.FileCacheExists);
+                        if (anyHasFileCache)
+                            ImGui.Checkbox("Reuse existing FileCache.csv (skip re-scan)", ref _reuseCache);
+
+                        ImGui.Separator();
+                        using (var table2 = ImRaii.Table("import_servers_table", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
+                        {
+                            if (table2)
+                            {
+                                ImGui.TableSetupColumn("Import", ImGuiTableColumnFlags.WidthFixed, 60);
+                                ImGui.TableSetupColumn("Name");
+                                ImGui.TableSetupColumn("URI");
+                                ImGui.TableSetupColumn("Auth");
+                                ImGui.TableSetupColumn("OAuth");
+                                ImGui.TableSetupColumn("Source");
+                                ImGui.TableHeadersRow();
+                                for (int s = 0; s < _scanList.Count; s++)
+                                {
+                                    var sc = _scanList[s];
+                                    for (int i = 0; i < sc.SourceServers.Count; i++)
+                                    {
+                                        var row = sc.SourceServers[i];
+                                        ImGui.TableNextRow();
+                                        ImGui.TableSetColumnIndex(0);
+                                        var sel = row.Selected;
+                                        if (ImGui.Checkbox($"##sel_{s}_{i}", ref sel)) row.Selected = sel;
+                                        ImGui.TableSetColumnIndex(1);
+                                        if (i == sc.SourceCurrentIndex)
+                                            UiSharedService.ColorText(row.ServerName + " (current)", ImGuiColors.HealerGreen);
+                                        else
+                                            ImGui.TextUnformatted(row.ServerName);
+                                        ImGui.TableSetColumnIndex(2);
+                                        ImGui.TextUnformatted(row.ServerUri);
+                                        ImGui.TableSetColumnIndex(3);
+                                        ImGui.TextUnformatted(row.AuthCount.ToString());
+                                        ImGui.TableSetColumnIndex(4);
+                                        ImGui.TextUnformatted(row.UseOAuth2 ? (row.HasToken ? "OAuth2 ✓" : "OAuth2") : "SecretKey");
+                                        ImGui.TableSetColumnIndex(5);
+                                        ImGui.TextUnformatted(Path.GetFileName(sc.SourceFolder));
+                                    }
+                                }
+                            }
+                        }
+
+                        ImGui.Separator();
+                        var selectedCount = _scanList.Sum(sc => sc.SourceServers.Count(s => s.Selected));
+                        using (ImRaii.Disabled(selectedCount == 0))
+                        {
+                            if (ImGui.Button($"Import Selected ({selectedCount})"))
+                            {
+                                int created = 0, updated = 0; bool cacheConfigured = false; bool cacheReused = false; string? err = null;
+                                bool first = true;
+                                foreach (var sc in _scanList)
+                                {
+                                    var chosen = sc.SourceServers.Where(s => s.Selected).ToList();
+                                    if (chosen.Count == 0) continue;
+                                    var sum = wizard.ImportSelected(sc, chosen, first ? _cachePathOverride : null, first ? _reuseCache : false);
+                                    if (!string.IsNullOrEmpty(sum.Error)) { err = sum.Error; break; }
+                                    created += sum.Created; updated += sum.Updated; cacheConfigured |= sum.CacheConfigured; cacheReused |= sum.CacheReused; first = false;
+                                }
+                                if (!string.IsNullOrEmpty(err))
+                                {
+                                    UiSharedService.ColorTextWrapped(err!, ImGuiColors.DalamudRed);
+                                }
+                                else
+                                {
+                                    UiSharedService.ColorTextWrapped($"Successfully imported {created + updated} server(s)!\n- Created: {created} new\n- Updated: {updated} existing\n- Cache: {(cacheConfigured ? (_reuseCache ? "reused (skipped scan)" : "configured for new scan") : "unchanged")}", ImGuiColors.HealerGreen);
+                                    _showImportModal = false;
+                                    _readFirstPage = true;
+#if !DEBUG
+                                    _timeoutTask = Task.Run(async () =>
+                                    {
+                                        for (int i = 2; i > 0; i--)
+                                        {
+                                            _timeoutLabel = $"Continuing in {i}s";
+                                            await Task.Delay(1000);
+                                        }
+                                    });
+#else
+                                    _timeoutTask = Task.CompletedTask;
+#endif
+                                }
+                            }
+                        }
+                    }
+
+                    if (ImGui.Button("Close")) _showImportModal = false;
+                    ImGui.End();
+                }
+            }
+
+            // Always draw file dialog manager for callbacks
+            _fileDialogManager.Draw();
+            return;
             _uiShared.BigText("Welcome to Neko-Net");
             ImGui.Separator();
             UiSharedService.TextWrapped("Neko-Net is a plugin that will replicate your full current character state including all Penumbra mods to other paired Neko-Net users. " +
