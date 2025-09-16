@@ -22,7 +22,17 @@ At this point in time:
 
 <img width="381" height="42" alt="image" src="https://github.com/user-attachments/assets/e7032fad-dab9-4e1c-9f54-9f70eb5f14ad" />
 
-❌ As is stand right now, you can connect to additional servers, but no syncing is happening outside of the main server your connected to.
+~~❌ As is stand right now, you can connect to additional servers, but no syncing is happening outside of the main server your connected to.~~
+
+## 9/15/2025 Update, Last saved state has starting coming through from additionally connected branches.  Additionally, mutli-syncing has started showing promise. Will need to bake in a (configurable) priority for which server maintain control over the application of mods.
+
+
+--------------------------------------------
+
+# Bugs:
+-  Upon closing ALL connections, vanilla states need to be restored. Disposes are not happening as they should be. 
+-  Currently, the last saved state is pulling through.
+
 
 
 For more information please join the discord.
