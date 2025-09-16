@@ -186,7 +186,7 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
 
         Logger.LogInformation("Recreating Connection");
         Mediator.Publish(new EventMessage(new Services.Events.Event(nameof(ApiController), Services.Events.EventSeverity.Informational,
-            $"Starting Connection to {_serverManager.CurrentServer.ServerName}")));
+            $"Starting Connection to {_serverManager.CurrentServer.ServerName}") { Server = _serverManager.CurrentServer.ServerUri }));
 
         _connectionCancellationTokenSource?.Cancel();
         _connectionCancellationTokenSource?.Dispose();
@@ -534,7 +534,7 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
         ServerState = ServerState.Reconnecting;
         Logger.LogWarning(arg, "Connection closed... Reconnecting");
         Mediator.Publish(new EventMessage(new Services.Events.Event(nameof(ApiController), Services.Events.EventSeverity.Warning,
-            $"Connection interrupted, reconnecting to {_serverManager.CurrentServer.ServerName}")));
+            $"Connection interrupted, reconnecting to {_serverManager.CurrentServer.ServerName}") { Server = _serverManager.CurrentServer.ServerUri }));
 
     }
 
@@ -584,7 +584,7 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
         if (_mareHub is not null)
         {
             Mediator.Publish(new EventMessage(new Services.Events.Event(nameof(ApiController), Services.Events.EventSeverity.Informational,
-                $"Stopping existing connection to {_serverManager.CurrentServer.ServerName}")));
+                $"Stopping existing connection to {_serverManager.CurrentServer.ServerName}") { Server = _serverManager.CurrentServer.ServerUri }));
 
             _initialized = false;
             _healthCheckTokenSource?.Cancel();

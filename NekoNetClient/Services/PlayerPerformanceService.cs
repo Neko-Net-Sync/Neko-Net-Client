@@ -8,6 +8,7 @@ using NekoNetClient.Services.Events;
 using NekoNetClient.Services.Mediator;
 using NekoNetClient.UI;
 using NekoNetClient.WebAPI.Files.Models;
+using NekoNetClient.Utils;
 
 namespace NekoNetClient.Services;
 
@@ -65,13 +66,13 @@ public class PlayerPerformanceService
         if (exceedsVram)
         {
             _mediator.Publish(new EventMessage(new Event(pairHandler.Pair.PlayerName, pairHandler.Pair.UserData, nameof(PlayerPerformanceService), EventSeverity.Warning,
-                $"Exceeds VRAM threshold: ({UiSharedService.ByteToString(vramUsage, addSuffix: true)}/{config.VRAMSizeWarningThresholdMiB} MiB)")));
+                $"Exceeds VRAM threshold: ({UiSharedService.ByteToString(vramUsage, addSuffix: true)}/{config.VRAMSizeWarningThresholdMiB} MiB)") { Server = pairHandler.Pair.ApiUrlOverride.ToServerLabel() }));
         }
 
         if (exceedsTris)
         {
             _mediator.Publish(new EventMessage(new Event(pairHandler.Pair.PlayerName, pairHandler.Pair.UserData, nameof(PlayerPerformanceService), EventSeverity.Warning,
-                $"Exceeds triangle threshold: ({triUsage}/{config.TrisAutoPauseThresholdThousands * 1000} triangles)")));
+                $"Exceeds triangle threshold: ({triUsage}/{config.TrisAutoPauseThresholdThousands * 1000} triangles)") { Server = pairHandler.Pair.ApiUrlOverride.ToServerLabel() }));
         }
 
         if (exceedsTris || exceedsVram)
@@ -146,7 +147,7 @@ public class PlayerPerformanceService
                 MareConfiguration.Models.NotificationType.Warning));
 
             _mediator.Publish(new EventMessage(new Event(pair.PlayerName, pair.UserData, nameof(PlayerPerformanceService), EventSeverity.Warning,
-                $"Exceeds triangle threshold: automatically paused ({triUsage}/{config.TrisAutoPauseThresholdThousands * 1000} triangles)")));
+                $"Exceeds triangle threshold: automatically paused ({triUsage}/{config.TrisAutoPauseThresholdThousands * 1000} triangles)") { Server = pair.ApiUrlOverride.ToServerLabel() }));
 
             _mediator.Publish(new PauseMessage(pair.UserData));
 
@@ -224,7 +225,7 @@ public class PlayerPerformanceService
             _mediator.Publish(new PauseMessage(pair.UserData));
 
             _mediator.Publish(new EventMessage(new Event(pair.PlayerName, pair.UserData, nameof(PlayerPerformanceService), EventSeverity.Warning,
-                $"Exceeds VRAM threshold: automatically paused ({UiSharedService.ByteToString(vramUsage, addSuffix: true)}/{config.VRAMSizeAutoPauseThresholdMiB} MiB)")));
+                $"Exceeds VRAM threshold: automatically paused ({UiSharedService.ByteToString(vramUsage, addSuffix: true)}/{config.VRAMSizeAutoPauseThresholdMiB} MiB)") { Server = pair.ApiUrlOverride.ToServerLabel() }));
 
             return false;
         }

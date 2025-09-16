@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using NekoNetClient.MareConfiguration;
 using NekoNetClient.Services.Mediator;
+using NekoNetClient.Services.ServerConfiguration;
 using NekoNetClient.WebAPI.Files.Models;
 using NekoNetClient.WebAPI.SignalR;
 using System.Collections.Concurrent;
@@ -13,20 +14,25 @@ namespace NekoNetClient.WebAPI.Files;
 public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
 {
     private readonly ConcurrentDictionary<Guid, bool> _downloadReady = new();
+    private readonly ConcurrentDictionary<int, Uri> _cdnByServerIdx = new();
+    private readonly ConcurrentDictionary<string, int> _serverIdxByHost = new(StringComparer.OrdinalIgnoreCase);
     private readonly HttpClient _httpClient;
     private readonly MareConfigService _mareConfig;
     private readonly object _semaphoreModificationLock = new();
     private readonly TokenProvider _tokenProvider;
+    private readonly ServerConfigurationManager _servers;
     private int _availableDownloadSlots;
     private SemaphoreSlim _downloadSemaphore;
     private int CurrentlyUsedDownloadSlots => _availableDownloadSlots - _downloadSemaphore.CurrentCount;
 
     public FileTransferOrchestrator(ILogger<FileTransferOrchestrator> logger, MareConfigService mareConfig,
-        MareMediator mediator, TokenProvider tokenProvider, HttpClient httpClient) : base(logger, mediator)
+        MareMediator mediator, TokenProvider tokenProvider, HttpClient httpClient,
+        ServerConfigurationManager servers) : base(logger, mediator)
     {
         _mareConfig = mareConfig;
         _tokenProvider = tokenProvider;
         _httpClient = httpClient;
+        _servers = servers;
         var ver = Assembly.GetExecutingAssembly().GetName().Version;
         _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Neko-Net", ver!.Major + "." + ver!.Minor + "." + ver!.Build));
 
@@ -36,6 +42,29 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         Mediator.Subscribe<ConnectedMessage>(this, (msg) =>
         {
             FilesCdnUri = msg.Connection.ServerInfo.FileServerAddress;
+            try
+            {
+                var idx = _servers.CurrentServerIndex;
+                if (FilesCdnUri != null)
+                {
+                    _cdnByServerIdx[idx] = FilesCdnUri;
+                    var hostKey = FilesCdnUri.IsDefaultPort ? FilesCdnUri.Host : $"{FilesCdnUri.Host}:{FilesCdnUri.Port}";
+                    _serverIdxByHost[hostKey] = idx;
+                }
+            }
+            catch { }
+        });
+
+        Mediator.Subscribe<ConfiguredConnectedMessage>(this, (msg) =>
+        {
+            try
+            {
+                var cdn = msg.Connection.ServerInfo.FileServerAddress;
+                _cdnByServerIdx[msg.ServerIndex] = cdn;
+                var hostKey = cdn.IsDefaultPort ? cdn.Host : $"{cdn.Host}:{cdn.Port}";
+                _serverIdxByHost[hostKey] = msg.ServerIndex;
+            }
+            catch { }
         });
 
         Mediator.Subscribe<DisconnectedMessage>(this, (msg) =>
@@ -49,6 +78,8 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
     }
 
     public Uri? FilesCdnUri { private set; get; }
+    public Uri? GetFilesCdnUriForServerIndex(int serverIndex)
+        => _cdnByServerIdx.TryGetValue(serverIndex, out var uri) ? uri : null;
     public List<FileTransfer> ForbiddenTransfers { get; } = [];
     public bool IsInitialized => FilesCdnUri != null;
 
@@ -146,7 +177,23 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
     private async Task<HttpResponseMessage> SendRequestInternalAsync(HttpRequestMessage requestMessage,
         CancellationToken? ct = null, HttpCompletionOption httpCompletionOption = HttpCompletionOption.ResponseContentRead)
     {
-        var token = await _tokenProvider.GetToken().ConfigureAwait(false);
+        string? token = null;
+        try
+        {
+            if (requestMessage.RequestUri != null)
+            {
+                var key = requestMessage.RequestUri.IsDefaultPort
+                    ? requestMessage.RequestUri.Host
+                    : $"{requestMessage.RequestUri.Host}:{requestMessage.RequestUri.Port}";
+                if (_serverIdxByHost.TryGetValue(key, out var idx))
+                {
+                    token = await _tokenProvider.GetOrUpdateTokenForServer(idx, ct ?? CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+        }
+        catch { }
+
+        token ??= await _tokenProvider.GetToken().ConfigureAwait(false);
         requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         if (requestMessage.Content != null && requestMessage.Content is not StreamContent && requestMessage.Content is not ByteArrayContent)

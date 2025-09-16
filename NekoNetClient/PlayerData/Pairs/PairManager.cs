@@ -11,6 +11,7 @@ using NekoNetClient.MareConfiguration.Models;
 using NekoNetClient.PlayerData.Factories;
 using NekoNetClient.Services.Events;
 using NekoNetClient.Services.Mediator;
+using NekoNetClient.Utils;
 using System.Collections.Concurrent;
 
 namespace NekoNetClient.PlayerData.Pairs;
@@ -178,7 +179,8 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     {
         if (!_allClientPairs.TryGetValue(dto.User, out var pair)) throw new InvalidOperationException("No user found for " + dto.User);
 
-        Mediator.Publish(new EventMessage(new Event(pair.UserData, nameof(PairManager), EventSeverity.Informational, "Received Character Data")));
+        Mediator.Publish(new EventMessage(new Event(pair.UserData, nameof(PairManager), EventSeverity.Informational, "Received Character Data")
+        { Server = VariousExtensions.ToServerLabel(pair.ApiUrlOverride) }));
         _allClientPairs[dto.User].ApplyData(dto);
     }
 

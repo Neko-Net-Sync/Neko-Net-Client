@@ -36,17 +36,22 @@ namespace NekoNetClient.WebAPI.SignalR
         private readonly ConcurrentDictionary<SyncService, PairManager> _svcPairManagers = new();
         private readonly ConcurrentDictionary<SyncService, SystemInfoDto> _svcSystemInfo = new();
         private readonly ConcurrentDictionary<SyncService, string> _lastError = new();
+        private readonly ConcurrentDictionary<SyncService, Uri> _svcCdn = new();
+        private readonly ConcurrentDictionary<SyncService, DateTime> _svcLastPush = new();
 
         // Per-configured-server dictionaries (true multi-server)
         private readonly ConcurrentDictionary<int, HubConnection> _cfgHubs = new();
         private readonly ConcurrentDictionary<int, PairManager> _cfgPairManagers = new();
         private readonly ConcurrentDictionary<int, SystemInfoDto> _cfgSystemInfo = new();
         private readonly ConcurrentDictionary<int, string> _cfgLastError = new();
+        private readonly ConcurrentDictionary<int, Uri> _cfgCdn = new();
+        private readonly ConcurrentDictionary<int, DateTime> _cfgLastPush = new();
 
         private sealed record ServiceSpec(string Endpoint, bool UseMareToken, bool WebSocketsOnly);
         private static readonly Dictionary<SyncService, ServiceSpec> ServiceMap = new()
         {
             { SyncService.NekoNet,  new ServiceSpec("wss://connect.neko-net.cc/mare",    true,  true) },
+            { SyncService.Lightless, new ServiceSpec("wss://sync.lightless-sync.org/lightless", true, true) },
             { SyncService.TeraSync, new ServiceSpec("wss://tera.terasync.app/tera-sync-v2", true, true) },
         };
 
@@ -74,12 +79,20 @@ namespace NekoNetClient.WebAPI.SignalR
         public HubConnection? Get(SyncService svc) => _hubs.TryGetValue(svc, out var hub) ? hub : null;
         public HubConnectionState GetState(SyncService svc) => _hubs.TryGetValue(svc, out var hub) ? hub.State : HubConnectionState.Disconnected;
         public string GetResolvedUrl(SyncService svc) => ServiceMap[svc].Endpoint;
+        public string? GetServiceCdnHost(SyncService svc)
+            => _svcCdn.TryGetValue(svc, out var u) ? (u.IsDefaultPort ? u.Host : u.Host + ":" + u.Port) : null;
+        public DateTime? GetServiceLastPushUtc(SyncService svc)
+            => _svcLastPush.TryGetValue(svc, out var ts) ? ts : null;
 
         // Configured servers API
         public HubConnection? GetConfiguredHub(int serverIndex)
             => _cfgHubs.TryGetValue(serverIndex, out var hub) ? hub : null;
         public HubConnectionState GetConfiguredState(int serverIndex)
             => _cfgHubs.TryGetValue(serverIndex, out var hub) ? hub.State : HubConnectionState.Disconnected;
+        public string? GetConfiguredCdnHost(int serverIndex)
+            => _cfgCdn.TryGetValue(serverIndex, out var u) ? (u.IsDefaultPort ? u.Host : u.Host + ":" + u.Port) : null;
+        public DateTime? GetConfiguredLastPushUtc(int serverIndex)
+            => _cfgLastPush.TryGetValue(serverIndex, out var ts) ? ts : null;
 
         public string GetConfiguredResolvedUrl(int serverIndex)
         {
@@ -180,7 +193,12 @@ namespace NekoNetClient.WebAPI.SignalR
             return _svcPairManagers.GetOrAdd(svc, s =>
             {
                 var logger = _loggerFactory.CreateLogger<PairManager>();
-                return new PairManager(logger, _pairFactory, _cfg, Mediator, _contextMenu, apiUrlOverride: _servers.CurrentApiUrl, serviceScoped: true);
+                // Derive a stable API base (scheme+host) from the service endpoint for per-service notes/tags
+                var endpoint = ServiceMap[s].Endpoint;
+                string apiBase;
+                try { var u = new Uri(endpoint); apiBase = u.GetLeftPart(UriPartial.Authority).Replace("ws://", "http://").Replace("wss://", "https://"); }
+                catch { apiBase = _servers.CurrentApiUrl; }
+                return new PairManager(logger, _pairFactory, _cfg, Mediator, _contextMenu, apiUrlOverride: apiBase, serviceScoped: true);
             });
         }
 
@@ -231,6 +249,16 @@ namespace NekoNetClient.WebAPI.SignalR
             var hub = await BuildHubAsync(svc, CancellationToken.None).ConfigureAwait(false);
             await hub.StartAsync().ConfigureAwait(false);
             await PostConnectBootstrapAsync(svc, hub).ConfigureAwait(false);
+            try
+            {
+                var conn = await GetConnectionInfoAsync(svc, CancellationToken.None).ConfigureAwait(false);
+                if (conn != null && conn.ServerInfo?.FileServerAddress != null)
+                {
+                    _svcCdn[svc] = conn.ServerInfo.FileServerAddress;
+                    Mediator.Publish(new ServiceConnectedMessage(svc, conn));
+                }
+            }
+            catch { }
             _hubs[svc] = hub;
         }
 
@@ -239,7 +267,41 @@ namespace NekoNetClient.WebAPI.SignalR
             var hub = await BuildConfiguredHubAsync(serverIndex, CancellationToken.None).ConfigureAwait(false);
             await hub.StartAsync().ConfigureAwait(false);
             await PostConnectBootstrapConfiguredAsync(serverIndex, hub).ConfigureAwait(false);
+            // Get ConnectionDto to obtain FileServerAddress for this configured server
+            try
+            {
+                var conn = await GetConfiguredConnectionInfoAsync(serverIndex, CancellationToken.None).ConfigureAwait(false);
+                if (conn != null)
+                {
+                    if (conn.ServerInfo?.FileServerAddress != null)
+                        _cfgCdn[serverIndex] = conn.ServerInfo.FileServerAddress;
+                    Mediator.Publish(new ConfiguredConnectedMessage(serverIndex, conn));
+                }
+            }
+            catch { }
             _cfgHubs[serverIndex] = hub;
+        }
+
+        public async Task PushCharacterDataAsync(SyncService svc, CharacterData data, List<UserData> recipients, CensusDataDto? census = null)
+        {
+            if (!_hubs.TryGetValue(svc, out var hub) || hub == null) return;
+            try
+            {
+                await hub.InvokeAsync("UserPushData", new UserCharaDataMessageDto(recipients, data, census)).ConfigureAwait(false);
+                _svcLastPush[svc] = DateTime.UtcNow;
+            }
+            catch { }
+        }
+
+        public async Task PushCharacterDataConfiguredAsync(int serverIndex, CharacterData data, List<UserData> recipients, CensusDataDto? census = null)
+        {
+            if (!_cfgHubs.TryGetValue(serverIndex, out var hub) || hub == null) return;
+            try
+            {
+                await hub.InvokeAsync("UserPushData", new UserCharaDataMessageDto(recipients, data, census)).ConfigureAwait(false);
+                _cfgLastPush[serverIndex] = DateTime.UtcNow;
+            }
+            catch { }
         }
 
         private async Task<HubConnection> BuildHubAsync(SyncService svc, CancellationToken ct)

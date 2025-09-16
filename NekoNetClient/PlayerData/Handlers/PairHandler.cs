@@ -119,7 +119,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                 _isVisible = value;
                 string text = "User Visibility Changed, now: " + (_isVisible ? "Is Visible" : "Is not Visible");
                 Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler),
-                    EventSeverity.Informational, text)));
+                    EventSeverity.Informational, text) { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
                 Mediator.Publish(new RefreshUiMessage());
             }
         }
@@ -139,7 +139,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         if (_dalamudUtil.IsInCombatOrPerforming)
         {
             Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Warning,
-                "Cannot apply character data: you are in combat or performing music, deferring application")));
+                "Cannot apply character data: you are in combat or performing music, deferring application") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
             Logger.LogDebug("[BASE-{appBase}] Received data but player is in combat or performing", applicationBase);
             _dataReceivedInDowntime = new(applicationBase, characterData, forceApplyCustomization);
             SetUploading(isUploading: false);
@@ -149,7 +149,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         if (_charaHandler == null || (PlayerCharacter == IntPtr.Zero))
         {
             Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Warning,
-                "Cannot apply character data: Receiving Player is in an invalid state, deferring application")));
+                "Cannot apply character data: Receiving Player is in an invalid state, deferring application") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
             Logger.LogDebug("[BASE-{appBase}] Received data but player was in invalid state, charaHandlerIsNull: {charaIsNull}, playerPointerIsNull: {ptrIsNull}",
                 applicationBase, _charaHandler == null, PlayerCharacter == IntPtr.Zero);
             var hasDiffMods = characterData.CheckUpdatedData(applicationBase, _cachedData, Logger,
@@ -171,7 +171,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         if (_dalamudUtil.IsInCutscene || _dalamudUtil.IsInGpose || !_ipcManager.Penumbra.APIAvailable || !_ipcManager.Glamourer.APIAvailable)
         {
             Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Warning,
-                "Cannot apply character data: you are in GPose, a Cutscene or Penumbra/Glamourer is not available")));
+                "Cannot apply character data: you are in GPose, a Cutscene or Penumbra/Glamourer is not available") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
             Logger.LogInformation("[BASE-{appbase}] Application of data for {player} while in cutscene/gpose or Penumbra/Glamourer unavailable, returning", applicationBase, this);
             return;
         }
@@ -179,7 +179,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         // Mark this pair busy to prevent mid-apply permission flips causing crashes
         Pair.SetApplying(true);
         Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Informational,
-            "Applying Character Data")));
+            "Applying Character Data") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
 
         _forceApplyMods |= forceApplyCustomization;
 
@@ -244,7 +244,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
             if (!string.IsNullOrEmpty(name))
             {
-                Mediator.Publish(new EventMessage(new Event(name, Pair.UserData, nameof(PairHandler), EventSeverity.Informational, "Disposing User")));
+                Mediator.Publish(new EventMessage(new Event(name, Pair.UserData, nameof(PairHandler), EventSeverity.Informational, "Disposing User") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
             }
 
             if (_lifetime.ApplicationStopping.IsCancellationRequested) return;
@@ -437,7 +437,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                 Logger.LogDebug("[BASE-{appBase}] Downloading missing files for player {name}, {kind}", applicationBase, PlayerName, updatedData);
 
                 Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Informational,
-                    $"Starting download for {toDownloadReplacements.Count} files")));
+                    $"Starting download for {toDownloadReplacements.Count} files") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
                 var toDownloadFiles = await _downloadManager.InitiateDownloadList(_charaHandler!, toDownloadReplacements, downloadToken).ConfigureAwait(false);
 
                 if (!_playerPerformanceService.ComputeAndAutoPauseOnVRAMUsageThresholds(this, charaData, toDownloadFiles))
@@ -563,7 +563,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             Initialize(pc.Name);
             Logger.LogDebug("One-Time Initialized {this}", this);
             Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Informational,
-                $"Initializing User For Character {pc.Name}")));
+                $"Initializing User For Character {pc.Name}") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
         }
 
         if (_charaHandler?.Address != nint.Zero && !IsVisible)

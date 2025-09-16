@@ -23,8 +23,8 @@ public class FileDownloadManagerFactory
         _fileCompactor = fileCompactor;
     }
 
-    public FileDownloadManager Create()
+    public FileDownloadManager Create(int? serverIndex = null)
     {
-        return new FileDownloadManager(_loggerFactory.CreateLogger<FileDownloadManager>(), _mareMediator, _fileTransferOrchestrator, _fileCacheManager, _fileCompactor);
+        return new FileDownloadManager(_loggerFactory.CreateLogger<FileDownloadManager>(), _mareMediator, _fileTransferOrchestrator, _fileCacheManager, _fileCompactor, serverIndex);
     }
 }

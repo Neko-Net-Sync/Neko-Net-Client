@@ -1322,7 +1322,7 @@ public class SettingsUi : WindowMediatorSubscriberBase
 
                 if (ImGui.Button("Delete everything", new Vector2(buttonSize, 0)))
                 {
-                    _ = Task.Run(_fileTransferManager.DeleteAllFiles);
+                    _ = Task.Run(() => _fileTransferManager.DeleteAllFiles());
                     _deleteFilesPopupModalShown = false;
                 }
 

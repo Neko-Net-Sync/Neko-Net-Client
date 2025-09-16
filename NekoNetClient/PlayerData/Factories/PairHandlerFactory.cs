@@ -45,8 +45,20 @@ public class PairHandlerFactory
 
     public PairHandler Create(Pair pair)
     {
+        int? serverIndex = null;
+        try
+        {
+            if (!string.IsNullOrEmpty(pair.ApiUrlOverride))
+            {
+                var urls = _serverConfigManager.GetServerApiUrls();
+                var idx = Array.FindIndex(urls, u => string.Equals(u, pair.ApiUrlOverride, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0) serverIndex = idx;
+            }
+        }
+        catch { }
+
         return new PairHandler(_loggerFactory.CreateLogger<PairHandler>(), pair, _gameObjectHandlerFactory,
-            _ipcManager, _fileDownloadManagerFactory.Create(), _pluginWarningNotificationManager, _dalamudUtilService, _hostApplicationLifetime,
+            _ipcManager, _fileDownloadManagerFactory.Create(serverIndex), _pluginWarningNotificationManager, _dalamudUtilService, _hostApplicationLifetime,
             _fileCacheManager, _mareMediator, _playerPerformanceService, _serverConfigManager);
     }
 }

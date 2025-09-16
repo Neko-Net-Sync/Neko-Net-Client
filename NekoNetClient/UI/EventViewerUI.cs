@@ -22,6 +22,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
     private string _filterCharacter = string.Empty;
     private string _filterUid = string.Empty;
     private string _filterSource = string.Empty;
+    private string _filterServer = string.Empty;
     private string _filterEvent = string.Empty;
 
     private List<Event> CurrentEvents
@@ -60,7 +61,12 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
                     || f.Character.Contains(_filterFreeText, StringComparison.OrdinalIgnoreCase)
                     || f.UID.Contains(_filterFreeText, StringComparison.OrdinalIgnoreCase)
                     || f.Message.Contains(_filterFreeText, StringComparison.OrdinalIgnoreCase)
+                    || (!string.IsNullOrEmpty(f.Server) && f.Server.Contains(_filterFreeText, StringComparison.OrdinalIgnoreCase))
                 ))
+                &&
+                (string.IsNullOrEmpty(_filterServer)
+                    || (!string.IsNullOrEmpty(f.Server) && f.Server.Contains(_filterServer, StringComparison.OrdinalIgnoreCase))
+                )
                 &&
                 (string.IsNullOrEmpty(_filterUid)
                     || (f.UID.Contains(_filterUid, StringComparison.OrdinalIgnoreCase))
@@ -87,6 +93,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
         _filterUid = string.Empty;
         _filterSource = string.Empty;
         _filterEvent = string.Empty;
+        _filterServer = string.Empty;
         _filteredEvents = RecreateFilter();
     }
 
@@ -141,6 +148,8 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
             ImGui.SetNextItemWidth(200);
             changedFilter |= ImGui.InputText("Filter by Source", ref _filterSource, 50);
             ImGui.SetNextItemWidth(200);
+            changedFilter |= ImGui.InputText("Filter by Server", ref _filterServer, 50);
+            ImGui.SetNextItemWidth(200);
             changedFilter |= ImGui.InputText("Filter by UID", ref _filterUid, 50);
             ImGui.SetNextItemWidth(200);
             changedFilter |= ImGui.InputText("Filter by Character", ref _filterCharacter, 50);
@@ -155,7 +164,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
         var min = ImGui.GetWindowContentRegionMin();
         var width = max.X - min.X;
         var height = max.Y - cursorPos;
-        using var table = ImRaii.Table("eventTable", 6, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.ScrollY | ImGuiTableFlags.RowBg,
+        using var table = ImRaii.Table("eventTable", 7, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.ScrollY | ImGuiTableFlags.RowBg,
             new Vector2(width, height));
         if (table)
         {
@@ -163,6 +172,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
             ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.NoSort);
             ImGui.TableSetupColumn("Time");
             ImGui.TableSetupColumn("Source");
+            ImGui.TableSetupColumn("Server");
             ImGui.TableSetupColumn("UID");
             ImGui.TableSetupColumn("Character");
             ImGui.TableSetupColumn("Event");
@@ -194,6 +204,9 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
                 ImGui.TableNextColumn();
                 ImGui.AlignTextToFramePadding();
                 ImGui.TextUnformatted(ev.EventSource);
+                ImGui.TableNextColumn();
+                ImGui.AlignTextToFramePadding();
+                ImGui.TextUnformatted(string.IsNullOrEmpty(ev.Server) ? "--" : ev.Server);
                 ImGui.TableNextColumn();
                 ImGui.AlignTextToFramePadding();
                 ImGui.TextUnformatted(string.IsNullOrEmpty(ev.UID) ? "--" : ev.UID);

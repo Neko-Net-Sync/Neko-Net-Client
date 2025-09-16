@@ -213,6 +213,22 @@ public static class VariousExtensions
         return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(obj))!;
     }
 
+    public static string ToServerLabel(this string? apiUrl)
+    {
+        if (string.IsNullOrEmpty(apiUrl)) return string.Empty;
+        try
+        {
+            var normalized = apiUrl.Replace("ws://", "http://", StringComparison.OrdinalIgnoreCase)
+                                   .Replace("wss://", "https://", StringComparison.OrdinalIgnoreCase);
+            var u = new Uri(normalized);
+            return u.IsDefaultPort ? u.Host : ($"{u.Host}:{u.Port}");
+        }
+        catch
+        {
+            return apiUrl;
+        }
+    }
+
     public static unsafe int? ObjectTableIndex(this IGameObject? gameObject)
     {
         if (gameObject == null || gameObject.Address == IntPtr.Zero)

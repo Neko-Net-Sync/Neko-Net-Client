@@ -68,6 +68,12 @@ internal sealed class ServiceSessionView
         var textSize = ImGui.CalcTextSize("Users Online");
         var shardText = string.IsNullOrEmpty(shard) ? string.Empty : $"Shard: {shard}";
         var shardSize = ImGui.CalcTextSize(shardText);
+        var cdnHost = _multi.GetServiceCdnHost(svc) ?? "-";
+        var lastPush = _multi.GetServiceLastPushUtc(svc);
+        var lastPushText = lastPush.HasValue ? ($"Last push: {FormatAgo(lastPush.Value)}") : "Last push: -";
+        var cdnText = $"CDN: {cdnHost}";
+        var cdnSize = ImGui.CalcTextSize(cdnText);
+        var pushSize = ImGui.CalcTextSize(lastPushText);
 
         ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - (userSize.X + textSize.X) / 2 - ImGui.GetStyle().ItemSpacing.X / 2);
         if (hubState == Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected)
@@ -90,6 +96,13 @@ internal sealed class ServiceSessionView
             ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - shardSize.X / 2);
             ImGui.TextUnformatted(shardText);
         }
+
+        // CDN + Last push lines, centered
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() - ImGui.GetStyle().ItemSpacing.Y);
+        ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - cdnSize.X / 2);
+        ImGui.TextColored(ImGuiColors.DalamudGrey, cdnText);
+        ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - pushSize.X / 2);
+        ImGui.TextColored(ImGuiColors.DalamudGrey, lastPushText);
 
         var connected = hubState is Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected or Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connecting or Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Reconnecting;
         var color = UiSharedService.GetBoolColor(!connected);
@@ -356,6 +369,12 @@ internal sealed class ServiceSessionView
         var textSize = ImGui.CalcTextSize("Users Online");
         var shardText = string.IsNullOrEmpty(shard) ? string.Empty : $"Shard: {shard}";
         var shardSize = ImGui.CalcTextSize(shardText);
+        var cdnHost = _multi.GetConfiguredCdnHost(serverIndex) ?? "-";
+        var lastPush = _multi.GetConfiguredLastPushUtc(serverIndex);
+        var lastPushText = lastPush.HasValue ? ($"Last push: {FormatAgo(lastPush.Value)}") : "Last push: -";
+        var cdnText = $"CDN: {cdnHost}";
+        var cdnSize = ImGui.CalcTextSize(cdnText);
+        var pushSize = ImGui.CalcTextSize(lastPushText);
 
         ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - (userSize.X + textSize.X) / 2 - ImGui.GetStyle().ItemSpacing.X / 2);
         if (hubState == Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected)
@@ -378,6 +397,13 @@ internal sealed class ServiceSessionView
             ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - shardSize.X / 2);
             ImGui.TextUnformatted(shardText);
         }
+
+        // CDN + Last push lines
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() - ImGui.GetStyle().ItemSpacing.Y);
+        ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - cdnSize.X / 2);
+        ImGui.TextColored(ImGuiColors.DalamudGrey, cdnText);
+        ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - pushSize.X / 2);
+        ImGui.TextColored(ImGuiColors.DalamudGrey, lastPushText);
 
         var connected = hubState is Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected or Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connecting or Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Reconnecting;
         var color = UiSharedService.GetBoolColor(!connected);
@@ -405,6 +431,16 @@ internal sealed class ServiceSessionView
             }
         }
         UiSharedService.AttachToolTip((connected ? "Disconnect" : "Connect") + " configured server");
+    }
+
+    private static string FormatAgo(DateTime tsUtc)
+    {
+        var delta = DateTime.UtcNow - tsUtc;
+        if (delta.TotalSeconds < 1) return "just now";
+        if (delta.TotalSeconds < 60) return $"{(int)delta.TotalSeconds}s ago";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
     }
 
     public void DrawConfigured(int serverIndex)

@@ -31,6 +31,8 @@ public record GposeEndMessage : MessageBase;
 public record CutsceneEndMessage : MessageBase;
 public record CutsceneFrameworkUpdateMessage : SameThreadMessage;
 public record ConnectedMessage(ConnectionDto Connection) : MessageBase;
+public record ConfiguredConnectedMessage(int ServerIndex, ConnectionDto Connection) : MessageBase;
+public record ServiceConnectedMessage(NekoNetClient.WebAPI.SignalR.SyncService Service, ConnectionDto Connection) : MessageBase;
 public record DisconnectedMessage : SameThreadMessage;
 public record PenumbraModSettingChangedMessage : MessageBase;
 public record PenumbraInitializedMessage : MessageBase;

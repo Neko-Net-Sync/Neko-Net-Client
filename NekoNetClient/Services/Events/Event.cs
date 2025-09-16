@@ -10,6 +10,7 @@ public record Event
     public string EventSource { get; }
     public EventSeverity EventSeverity { get; }
     public string Message { get; }
+    public string Server { get; init; } = string.Empty;
 
     public Event(string? Character, UserData UserData, string EventSource, EventSeverity EventSeverity, string Message)
     {

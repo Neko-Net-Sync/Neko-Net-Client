@@ -60,6 +60,9 @@ public class Pair
     public UserFullPairDto UserPair { get; set; }
     private PairHandler? CachedPlayer { get; set; }
 
+    // Expose the API URL override (used by service-scoped pairs)
+    public string? ApiUrlOverride => _apiUrlOverride;
+
     public void AddContextMenu(IMenuOpenedArgs args)
     {
         if (CachedPlayer == null || (args.Target is not MenuTargetDefault target) || target.TargetObjectId != CachedPlayer.PlayerCharacterId || IsPaused) return;

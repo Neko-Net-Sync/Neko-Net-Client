@@ -6,6 +6,7 @@ using NekoNet.API.Data;
 using NekoNet.API.Dto;
 using NekoNet.API.Dto.User;
 using System.Text;
+using NekoNetClient.Utils;
 
 namespace NekoNetClient.WebAPI.SignalR;
 
@@ -99,8 +100,8 @@ public partial class ApiController
             var pair = _pairManager.GetPairByUID(userPermissions.User.UID);
             if (pair != null && pair.IsApplying)
             {
-                Mediator.Publish(new EventMessage(new Event(pair.PlayerName, pair.UserData, nameof(ApiController), EventSeverity.Informational,
-                    "Permission change deferred (apply in progress)")));
+            Mediator.Publish(new EventMessage(new Event(pair.PlayerName, pair.UserData, nameof(ApiController), EventSeverity.Informational,
+                "Permission change deferred (apply in progress)") { Server = VariousExtensions.ToServerLabel(pair.ApiUrlOverride) }));
 
                 var start = DateTime.UtcNow;
                 while (pair.IsApplying && (DateTime.UtcNow - start) < TimeSpan.FromSeconds(2))
