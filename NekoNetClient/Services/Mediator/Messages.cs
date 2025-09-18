@@ -1,4 +1,4 @@
-﻿using Dalamud.Game.ClientState.Objects.Types;
+using Dalamud.Game.ClientState.Objects.Types;
 using NekoNet.API.Data;
 using NekoNet.API.Dto;
 using NekoNet.API.Dto.CharaData;
@@ -32,7 +32,7 @@ public record CutsceneEndMessage : MessageBase;
 public record CutsceneFrameworkUpdateMessage : SameThreadMessage;
 public record ConnectedMessage(ConnectionDto Connection) : MessageBase;
 public record ConfiguredConnectedMessage(int ServerIndex, ConnectionDto Connection) : MessageBase;
-public record ServiceConnectedMessage(NekoNetClient.WebAPI.SignalR.SyncService Service, ConnectionDto Connection) : MessageBase;
+public record ServiceConnectedMessage(NekoNetClient.WebAPI.SignalR.SyncService Service, ConnectionDto Connection, string ServiceApiBase) : MessageBase;
 public record DisconnectedMessage : SameThreadMessage;
 public record PenumbraModSettingChangedMessage : MessageBase;
 public record PenumbraInitializedMessage : MessageBase;

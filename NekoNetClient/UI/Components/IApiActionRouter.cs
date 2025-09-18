@@ -107,6 +107,11 @@ internal sealed class ServiceApiActionRouter : IApiActionRouter
                         await Task.Delay(100).ConfigureAwait(false);
                     }
                 }
+                // Proactively revert visuals on pause so the user returns to vanilla immediately
+                if (pair != null && permissions.Permissions.IsPaused())
+                {
+                    pair.MarkOffline(wait: false, reason: "Paused — local visual cleanup triggered");
+                }
             }
             catch { }
 
@@ -217,7 +222,8 @@ internal sealed class ConfiguredApiActionRouter : IApiActionRouter
                     }
                     if (permissions.Permissions.IsPaused())
                     {
-                        pair.MarkDeferCleanupOnce();
+                        // Proactive local cleanup on pause
+                        pair.MarkOffline(wait: false, reason: "Paused — local visual cleanup triggered");
                     }
                 }
             }

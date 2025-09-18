@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+using System;
+using Microsoft.Extensions.Logging;
 using NekoNetClient.MareConfiguration;
 using NekoNetClient.Services.Mediator;
 using NekoNetClient.Services.ServerConfiguration;
@@ -15,6 +16,7 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
 {
     private readonly ConcurrentDictionary<Guid, bool> _downloadReady = new();
     private readonly ConcurrentDictionary<int, Uri> _cdnByServerIdx = new();
+    private readonly ConcurrentDictionary<string, Uri> _cdnByServiceApiBase = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, int> _serverIdxByHost = new(StringComparer.OrdinalIgnoreCase);
     private readonly HttpClient _httpClient;
     private readonly MareConfigService _mareConfig;
@@ -67,6 +69,26 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
             catch { }
         });
 
+        Mediator.Subscribe<ServiceConnectedMessage>(this, (msg) =>
+        {
+            try
+            {
+                var baseKey = NormalizeApiBase(msg.ServiceApiBase);
+                if (string.IsNullOrEmpty(baseKey)) return;
+                var cdn = msg.Connection.ServerInfo.FileServerAddress;
+                if (cdn == null)
+                {
+                    if (Uri.TryCreate(baseKey, UriKind.Absolute, out var fallback))
+                    {
+                        _cdnByServiceApiBase[baseKey] = fallback;
+                    }
+                    return;
+                }
+                _cdnByServiceApiBase[baseKey] = cdn;
+            }
+            catch { }
+        });
+
         Mediator.Subscribe<DisconnectedMessage>(this, (msg) =>
         {
             FilesCdnUri = null;
@@ -80,6 +102,18 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
     public Uri? FilesCdnUri { private set; get; }
     public Uri? GetFilesCdnUriForServerIndex(int serverIndex)
         => _cdnByServerIdx.TryGetValue(serverIndex, out var uri) ? uri : null;
+    public Uri? GetFilesCdnUriForApiBase(string apiBase)
+    {
+        var key = NormalizeApiBase(apiBase);
+        if (string.IsNullOrEmpty(key)) return null;
+        if (_cdnByServiceApiBase.TryGetValue(key, out var uri)) return uri;
+        if (Uri.TryCreate(key, UriKind.Absolute, out var fallback))
+        {
+            _cdnByServiceApiBase[key] = fallback;
+            return fallback;
+        }
+        return null;
+    }
     public List<FileTransfer> ForbiddenTransfers { get; } = [];
     public bool IsInitialized => FilesCdnUri != null;
 
@@ -174,6 +208,23 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         return Math.Clamp(dividedLimit, 1, long.MaxValue);
     }
 
+    private static string? NormalizeApiBase(string? apiBase)
+    {
+        if (string.IsNullOrWhiteSpace(apiBase)) return null;
+        if (!Uri.TryCreate(apiBase, UriKind.Absolute, out var uri))
+        {
+            var trimmed = apiBase.Trim().TrimEnd('/');
+            if (trimmed.StartsWith("wss://", StringComparison.OrdinalIgnoreCase)) return "https://" + trimmed.Substring(6);
+            if (trimmed.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)) return "http://" + trimmed.Substring(5);
+            return trimmed;
+        }
+        var builder = new UriBuilder(uri);
+        if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
+        else if (string.Equals(builder.Scheme, "ws", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "http";
+        builder.Port = -1;
+        return builder.Uri.ToString().TrimEnd('/');
+    }
+
     private async Task<HttpResponseMessage> SendRequestInternalAsync(HttpRequestMessage requestMessage,
         CancellationToken? ct = null, HttpCompletionOption httpCompletionOption = HttpCompletionOption.ResponseContentRead)
     {
@@ -193,7 +244,7 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         }
         catch { }
 
-        token ??= await _tokenProvider.GetToken().ConfigureAwait(false);
+        token ??= await _tokenProvider.GetOrUpdateToken(ct ?? CancellationToken.None).ConfigureAwait(false);
         requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         if (requestMessage.Content != null && requestMessage.Content is not StreamContent && requestMessage.Content is not ByteArrayContent)
@@ -223,3 +274,4 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         }
     }
 }
+

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+using System;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.FileCache;
 using NekoNetClient.Interop.Ipc;
@@ -50,15 +51,34 @@ public class PairHandlerFactory
         {
             if (!string.IsNullOrEmpty(pair.ApiUrlOverride))
             {
+                string Normalize(string value)
+                {
+                    if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+                    try
+                    {
+                        var uri = new Uri(value, UriKind.Absolute);
+                        var builder = new UriBuilder(uri);
+                        if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
+                        else if (string.Equals(builder.Scheme, "ws", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "http";
+                        builder.Port = -1;
+                        return builder.Uri.Host + builder.Uri.AbsolutePath.TrimEnd('/');
+                    }
+                    catch
+                    {
+                        return value.Trim().TrimEnd('/');
+                    }
+                }
+
+                var normalizedTarget = Normalize(pair.ApiUrlOverride);
                 var urls = _serverConfigManager.GetServerApiUrls();
-                var idx = Array.FindIndex(urls, u => string.Equals(u, pair.ApiUrlOverride, StringComparison.OrdinalIgnoreCase));
+                var idx = Array.FindIndex(urls, u => string.Equals(Normalize(u), normalizedTarget, StringComparison.OrdinalIgnoreCase));
                 if (idx >= 0) serverIndex = idx;
             }
         }
         catch { }
 
         return new PairHandler(_loggerFactory.CreateLogger<PairHandler>(), pair, _gameObjectHandlerFactory,
-            _ipcManager, _fileDownloadManagerFactory.Create(serverIndex), _pluginWarningNotificationManager, _dalamudUtilService, _hostApplicationLifetime,
+            _ipcManager, _fileDownloadManagerFactory.Create(serverIndex, pair.ApiUrlOverride), _pluginWarningNotificationManager, _dalamudUtilService, _hostApplicationLifetime,
             _fileCacheManager, _mareMediator, _playerPerformanceService, _serverConfigManager);
     }
 }

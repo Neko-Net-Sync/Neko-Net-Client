@@ -236,6 +236,11 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
 
     private async Task UploadUnverifiedFiles(HashSet<string> unverifiedUploadHashes, List<UserData> visiblePlayers, CancellationToken uploadToken)
     {
+        // Deduplicate upfront to avoid any downstream Single() surprises
+        unverifiedUploadHashes = unverifiedUploadHashes
+            .Where(h => !string.IsNullOrWhiteSpace(h))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         unverifiedUploadHashes = unverifiedUploadHashes.Where(h => _fileDbManager.GetFileCacheByHash(h) != null).ToHashSet(StringComparer.Ordinal);
 
         Logger.LogDebug("Verifying {count} files", unverifiedUploadHashes.Count);
@@ -246,6 +251,10 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         {
             try
             {
+                // Guard against adding duplicate hashes into CurrentUploads
+                if (CurrentUploads.Exists(u => string.Equals(u.Hash, file.Hash, StringComparison.Ordinal)))
+                    continue;
+
                 CurrentUploads.Add(new UploadFileTransfer(file)
                 {
                     Total = new FileInfo(_fileDbManager.GetFileCacheByHash(file.Hash)!.ResolvedFilepath).Length,
@@ -277,10 +286,21 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         {
             Logger.LogDebug("[{hash}] Compressing", file);
             var data = await _fileDbManager.GetCompressedFileData(file.Hash, uploadToken).ConfigureAwait(false);
-            CurrentUploads.Single(e => string.Equals(e.Hash, data.Item1, StringComparison.Ordinal)).Total = data.Item2.Length;
+            // Be robust against unexpected duplicates or race conditions in CurrentUploads
+            var cu = CurrentUploads.FirstOrDefault(e => string.Equals(e.Hash, data.Item1, StringComparison.Ordinal));
+            if (cu != null) cu.Total = data.Item2.Length;
             Logger.LogDebug("[{hash}] Starting upload for {filePath}", data.Item1, _fileDbManager.GetFileCacheByHash(data.Item1)!.ResolvedFilepath);
             await uploadTask.ConfigureAwait(false);
-            uploadTask = UploadFile(data.Item2, file.Hash, true, uploadToken);
+            try
+            {
+                uploadTask = UploadFile(data.Item2, file.Hash, true, uploadToken);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("more than one matching element", StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.LogWarning(ex, "Duplicate hash encountered during upload bookkeeping for {hash}", file.Hash);
+                // Continue with best effort
+                uploadTask = UploadFile(data.Item2, file.Hash, true, uploadToken);
+            }
             uploadToken.ThrowIfCancellationRequested();
         }
 

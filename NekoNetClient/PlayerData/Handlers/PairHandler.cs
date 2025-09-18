@@ -254,6 +254,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                 Logger.LogTrace("[{applicationId}] Restoring state for {name} ({OnlineUser})", applicationId, name, Pair.UserPair);
                 // Defer heavy IPC cleanup to a background task to avoid blocking the game during draw/apply
                 var cachedDataSnapshot = _cachedData?.DeepClone();
+                var identSnapshot = Pair.Ident; // capture before pair mark-offline clears it
                 var deferCompletely = Pair.ConsumeDeferCleanupOnce();
                 _ = Task.Run(async () =>
                 {
@@ -279,6 +280,23 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                         {
                             Logger.LogDebug("[{applicationId}] Restoring Glamourer for {name} ({user}) [async]", applicationId, name, Pair.UserPair);
                             await _ipcManager.Glamourer.RevertByNameAsync(Logger, name, applicationId).ConfigureAwait(false);
+
+                            // Also clear honorifics and force a Penumbra redraw when disposing an out-of-visibility user
+                            try
+                            {
+                                var addr = _dalamudUtil.GetPlayerCharacterFromCachedTableByIdent(Pair.Ident);
+                                if (addr != nint.Zero)
+                                {
+                                    Logger.LogDebug("[{applicationId}] Clearing Honorific and Redrawing {alias}/{name}", applicationId, Pair.UserData.AliasOrUID, name);
+                                    await _ipcManager.Honorific.ClearTitleAsync(addr).ConfigureAwait(false);
+                                    using var tempHandler = await _gameObjectHandlerFactory.Create(ObjectKind.Player, () => addr, isWatched: false).ConfigureAwait(false);
+                                    await _ipcManager.Penumbra.RedrawAsync(Logger, tempHandler, applicationId, CancellationToken.None).ConfigureAwait(false);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.LogTrace(ex, "[{applicationId}] Failed to clear honorific/redraw during dispose for {name}", applicationId, name);
+                            }
                         }
                         else if (cachedDataSnapshot != null)
                         {
@@ -288,7 +306,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                             {
                                 try
                                 {
-                                    await RevertCustomizationDataAsync(item.Key, name, applicationId, cts.Token).ConfigureAwait(false);
+                                    await RevertCustomizationDataAsync(item.Key, name, identSnapshot, applicationId, cts.Token).ConfigureAwait(false);
                                 }
                                 catch (InvalidOperationException ex)
                                 {
@@ -551,6 +569,12 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                 Logger.LogWarning(ex, "[{applicationId}] Cancelled", _applicationId);
             }
         }
+        finally
+        {
+            // Mark pair as no longer applying so UI actions (pause/unpause) become available again
+            Pair.SetApplying(false);
+            Mediator.Publish(new RefreshUiMessage());
+        }
     }
 
     private void FrameworkUpdate()
@@ -618,9 +642,23 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, _charaHandler.GetGameObject()!.ObjectIndex).GetAwaiter().GetResult();
     }
 
-    private async Task RevertCustomizationDataAsync(ObjectKind objectKind, string name, Guid applicationId, CancellationToken cancelToken)
+    private async Task RevertCustomizationDataAsync(ObjectKind objectKind, string name, string ident, Guid applicationId, CancellationToken cancelToken)
     {
-        nint address = _dalamudUtil.GetPlayerCharacterFromCachedTableByIdent(Pair.Ident);
+        nint address = _dalamudUtil.GetPlayerCharacterFromCachedTableByIdent(ident);
+        if (address == nint.Zero && objectKind == ObjectKind.Player)
+        {
+            // Fallback: if we cannot resolve a live address, at least revert by name via Glamourer
+            Logger.LogDebug("[{applicationId}] Could not resolve address for {alias}/{name}; reverting by name", applicationId, Pair.UserData.AliasOrUID, name);
+            try
+            {
+                await _ipcManager.Glamourer.RevertByNameAsync(Logger, name, applicationId).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "[{applicationId}] RevertByName fallback failed for {name}", applicationId, name);
+            }
+            return;
+        }
         if (address == nint.Zero) return;
 
         Logger.LogDebug("[{applicationId}] Reverting all Customization for {alias}/{name} {objectKind}", applicationId, Pair.UserData.AliasOrUID, name, objectKind);
@@ -649,6 +687,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             await _ipcManager.Moodles.RevertStatusAsync(address).ConfigureAwait(false);
             Logger.LogDebug("[{applicationId}] Restoring Pet Nicknames for {alias}/{name}", applicationId, Pair.UserData.AliasOrUID, name);
             await _ipcManager.PetNames.ClearPlayerData(address).ConfigureAwait(false);
+            // Ensure a redraw so visual state fully resets
+            await _ipcManager.Penumbra.RedrawAsync(Logger, tempHandler, applicationId, cancelToken).ConfigureAwait(false);
         }
         else if (objectKind == ObjectKind.MinionOrMount)
         {

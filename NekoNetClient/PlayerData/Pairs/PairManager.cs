@@ -92,8 +92,15 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         else
         {
             _allClientPairs[dto.User].UserPair.IndividualPairStatus = dto.IndividualPairStatus;
-            _allClientPairs[dto.User].ApplyLastReceivedData();
         }
+
+        // Always sync permissions from server payload
+        _allClientPairs[dto.User].UserPair.OwnPermissions = dto.OwnPermissions;
+        _allClientPairs[dto.User].UserPair.OtherPermissions = dto.OtherPermissions;
+
+        // Only apply last data if not paused
+        if (!_allClientPairs[dto.User].IsPaused)
+            _allClientPairs[dto.User].ApplyLastReceivedData();
 
         RecreateLazy();
     }
@@ -114,7 +121,8 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         _allClientPairs[dto.User].UserPair.OtherPermissions = dto.OtherPermissions;
         if (addToLastAddedUser)
             LastAddedUser = _allClientPairs[dto.User];
-        _allClientPairs[dto.User].ApplyLastReceivedData();
+        if (!_allClientPairs[dto.User].IsPaused)
+            _allClientPairs[dto.User].ApplyLastReceivedData();
         RecreateLazy();
     }
 
@@ -181,6 +189,12 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
 
         Mediator.Publish(new EventMessage(new Event(pair.UserData, nameof(PairManager), EventSeverity.Informational, "Received Character Data")
         { Server = VariousExtensions.ToServerLabel(pair.ApiUrlOverride) }));
+        if (pair.IsPaused)
+        {
+            // Cache only; do not attempt to apply while paused
+            pair.LastReceivedCharacterData = dto.CharaData;
+            return;
+        }
         _allClientPairs[dto.User].ApplyData(dto);
     }
 
