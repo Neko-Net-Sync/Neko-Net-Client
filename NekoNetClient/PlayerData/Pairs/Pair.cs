@@ -10,7 +10,6 @@ using NekoNetClient.PlayerData.Handlers;
 using NekoNetClient.Services.Mediator;
 using NekoNetClient.Services.ServerConfiguration;
 using NekoNetClient.Utils;
-using NekoNetClient.Services.Events;
 
 namespace NekoNetClient.PlayerData.Pairs;
 
@@ -66,7 +65,7 @@ public class Pair
 
     public void AddContextMenu(IMenuOpenedArgs args)
     {
-        if (CachedPlayer == null || (args.Target is not MenuTargetDefault target) || target.TargetObjectId != CachedPlayer.PlayerCharacterId) return;
+        if (CachedPlayer == null || (args.Target is not MenuTargetDefault target) || target.TargetObjectId != CachedPlayer.PlayerCharacterId || IsPaused) return;
 
         SeStringBuilder seStringBuilder = new();
         SeStringBuilder seStringBuilder2 = new();
@@ -76,29 +75,23 @@ public class Pair
         var reapplyDataSeString = seStringBuilder2.AddText("Reapply last data").Build();
         var cyclePauseState = seStringBuilder3.AddText("Cycle pause state").Build();
         var changePermissions = seStringBuilder4.AddText("Change Permissions").Build();
-        if (!IsPaused)
+        args.AddMenuItem(new MenuItem()
         {
-            args.AddMenuItem(new MenuItem()
-            {
-                Name = openProfileSeString,
-                OnClicked = (a) => _mediator.Publish(new ProfileOpenStandaloneMessage(this)),
-                UseDefaultPrefix = false,
-                PrefixChar = 'M',
-                PrefixColor = 526
-            });
-        }
+            Name = openProfileSeString,
+            OnClicked = (a) => _mediator.Publish(new ProfileOpenStandaloneMessage(this)),
+            UseDefaultPrefix = false,
+            PrefixChar = 'M',
+            PrefixColor = 526
+        });
 
-        if (!IsPaused)
+        args.AddMenuItem(new MenuItem()
         {
-            args.AddMenuItem(new MenuItem()
-            {
-                Name = reapplyDataSeString,
-                OnClicked = (a) => ApplyLastReceivedData(forced: true),
-                UseDefaultPrefix = false,
-                PrefixChar = 'M',
-                PrefixColor = 526
-            });
-        }
+            Name = reapplyDataSeString,
+            OnClicked = (a) => ApplyLastReceivedData(forced: true),
+            UseDefaultPrefix = false,
+            PrefixChar = 'M',
+            PrefixColor = 526
+        });
 
         args.AddMenuItem(new MenuItem()
         {
@@ -224,7 +217,7 @@ public class Pair
         return UserPair.Groups.Any() || UserPair.IndividualPairStatus != IndividualPairStatus.None;
     }
 
-    public void MarkOffline(bool wait = true, string? reason = null)
+    public void MarkOffline(bool wait = true)
     {
         try
         {
@@ -235,16 +228,6 @@ public class Pair
             CachedPlayer = null;
             player?.Dispose();
             _onlineUserIdentDto = null;
-
-            if (!string.IsNullOrEmpty(reason))
-            {
-                try
-                {
-                    _mediator.Publish(new EventMessage(new Event(PlayerName ?? string.Empty, UserData, nameof(Pair), EventSeverity.Informational,
-                        reason) { Server = _apiUrlOverride.ToServerLabel() }));
-                }
-                catch { }
-            }
         }
         finally
         {

@@ -14,22 +14,7 @@ public static class Crypto
     public static string GetFileHash(this string filePath)
     {
         using SHA1CryptoServiceProvider cryptoProvider = new();
-        const int maxAttempts = 8;
-        int attempt = 0;
-        while (true)
-        {
-            try
-            {
-                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 8192, FileOptions.SequentialScan);
-                return BitConverter.ToString(cryptoProvider.ComputeHash(fs)).Replace("-", "", StringComparison.Ordinal);
-            }
-            catch (IOException) when (attempt++ < maxAttempts)
-            {
-                // File is being written or exclusively locked by another process; back off briefly
-                Thread.Sleep(25 * attempt);
-                continue;
-            }
-        }
+        return BitConverter.ToString(cryptoProvider.ComputeHash(File.ReadAllBytes(filePath))).Replace("-", "", StringComparison.Ordinal);
     }
 
     public static string GetHash256(this (string, ushort) playerToHash)
