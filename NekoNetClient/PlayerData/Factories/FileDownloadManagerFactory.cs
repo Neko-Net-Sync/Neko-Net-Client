@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using NekoNetClient.FileCache;
 using NekoNetClient.Services.Mediator;
 using NekoNetClient.WebAPI.Files;
@@ -23,8 +23,8 @@ public class FileDownloadManagerFactory
         _fileCompactor = fileCompactor;
     }
 
-    public FileDownloadManager Create(int? serverIndex = null, string? serviceApiBase = null)
+    public FileDownloadManager Create(int? serverIndex = null)
     {
-        return new FileDownloadManager(_loggerFactory.CreateLogger<FileDownloadManager>(), _mareMediator, _fileTransferOrchestrator, _fileCacheManager, _fileCompactor, serverIndex, serviceApiBase);
+        return new FileDownloadManager(_loggerFactory.CreateLogger<FileDownloadManager>(), _mareMediator, _fileTransferOrchestrator, _fileCacheManager, _fileCompactor, serverIndex);
     }
 }

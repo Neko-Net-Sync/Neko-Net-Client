@@ -7,7 +7,6 @@ using NekoNet.API.Dto;
 using NekoNet.API.Dto.User;
 using System.Text;
 using NekoNetClient.Utils;
-using NekoNet.API.Data.Extensions;
 
 namespace NekoNetClient.WebAPI.SignalR;
 
@@ -101,21 +100,14 @@ public partial class ApiController
             var pair = _pairManager.GetPairByUID(userPermissions.User.UID);
             if (pair != null && pair.IsApplying)
             {
-                Mediator.Publish(new EventMessage(new Event(pair.PlayerName, pair.UserData, nameof(ApiController), EventSeverity.Informational,
-                    "Permission change deferred (apply in progress)") { Server = VariousExtensions.ToServerLabel(pair.ApiUrlOverride) }));
+            Mediator.Publish(new EventMessage(new Event(pair.PlayerName, pair.UserData, nameof(ApiController), EventSeverity.Informational,
+                "Permission change deferred (apply in progress)") { Server = VariousExtensions.ToServerLabel(pair.ApiUrlOverride) }));
 
                 var start = DateTime.UtcNow;
                 while (pair.IsApplying && (DateTime.UtcNow - start) < TimeSpan.FromSeconds(2))
                 {
                     await Task.Delay(100).ConfigureAwait(false);
                 }
-            }
-
-            // If we are pausing this user, proactively revert visuals locally
-            // so the client returns to vanilla immediately without waiting for echo
-            if (pair != null && userPermissions.Permissions.IsPaused())
-            {
-                pair.MarkOffline(wait: false, reason: "Paused — local visual cleanup triggered");
             }
         }
         catch { /* best effort only */ }
