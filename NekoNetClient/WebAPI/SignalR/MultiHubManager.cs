@@ -199,7 +199,8 @@ namespace NekoNetClient.WebAPI.SignalR
             }
             catch
             {
-                return _servers.CurrentApiUrl.TrimEnd('/');
+                var current = _servers.CurrentApiUrl;
+                return SyncServiceSpecifications.TrimTrailingSlashes(current);
             }
         }
         public PairManager GetPairManagerForConfigured(int serverIndex)

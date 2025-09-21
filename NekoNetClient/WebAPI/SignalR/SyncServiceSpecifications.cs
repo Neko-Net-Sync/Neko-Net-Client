@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
@@ -31,7 +32,7 @@ internal static class SyncServiceSpecifications
                 builder.Path = "/";
                 builder.Query = string.Empty;
                 builder.Fragment = string.Empty;
-                return builder.Uri.ToString().TrimEnd('/');
+                return TrimTrailingSlashes(builder.Uri.ToString());
             }
         }
     }
@@ -107,12 +108,13 @@ internal static class SyncServiceSpecifications
         {
             value = value.StartsWith("//", StringComparison.Ordinal)
                 ? "https:" + value
-                : "https://" + value.TrimStart('/');
+                : "https://" + TrimLeadingSlashes(value);
         }
 
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
         {
-            return hostOrUrl.Trim().Trim('/').ToLowerInvariant();
+            var trimmed = TrimSlashes(hostOrUrl.Trim());
+            return trimmed.ToLowerInvariant();
         }
 
         return NormalizeAuthority(uri);
@@ -131,17 +133,15 @@ internal static class SyncServiceSpecifications
             return string.Empty;
         }
 
-        if (!normalized.StartsWith("/", StringComparison.Ordinal))
+        var trimmed = TrimSlashes(normalized);
+        if (trimmed.Length == 0)
         {
-            normalized = "/" + normalized;
+            return normalized.StartsWith("/", StringComparison.Ordinal) && normalized.Length == 1
+                ? "/"
+                : string.Empty;
         }
 
-        if (normalized.Length > 1 && normalized.EndsWith("/", StringComparison.Ordinal))
-        {
-            normalized = normalized.TrimEnd('/');
-        }
-
-        return normalized;
+        return "/" + trimmed;
     }
 
     private static Specification Create(string endpoint, string apiPath, bool useMareToken, bool requiresWebSockets)
@@ -184,4 +184,44 @@ internal static class SyncServiceSpecifications
 
         return host + ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
     }
+
+    internal static string TrimTrailingSlashes(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        var end = value.Length - 1;
+        while (end >= 0 && value[end] == '/')
+        {
+            end--;
+        }
+
+        if (end < 0)
+        {
+            return string.Empty;
+        }
+
+        return end == value.Length - 1 ? value : value.Substring(0, end + 1);
+    }
+
+    private static string TrimLeadingSlashes(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        var index = 0;
+        while (index < value.Length && value[index] == '/')
+        {
+            index++;
+        }
+
+        return index == 0 ? value : value.Substring(index);
+    }
+
+    private static string TrimSlashes(string value)
+        => TrimTrailingSlashes(TrimLeadingSlashes(value));
 }
