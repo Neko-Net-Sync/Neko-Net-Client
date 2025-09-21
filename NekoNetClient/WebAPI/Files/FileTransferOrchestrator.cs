@@ -67,6 +67,21 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
             catch { }
         });
 
+        Mediator.Subscribe<ServiceConnectedMessage>(this, (msg) =>
+        {
+            try
+            {
+                if (!msg.ServerIndex.HasValue) return;
+                var cdn = msg.Connection.ServerInfo?.FileServerAddress;
+                if (cdn == null) return;
+
+                _cdnByServerIdx[msg.ServerIndex.Value] = cdn;
+                var hostKey = cdn.IsDefaultPort ? cdn.Host : $"{cdn.Host}:{cdn.Port}";
+                _serverIdxByHost[hostKey] = msg.ServerIndex.Value;
+            }
+            catch { }
+        });
+
         Mediator.Subscribe<DisconnectedMessage>(this, (msg) =>
         {
             FilesCdnUri = null;

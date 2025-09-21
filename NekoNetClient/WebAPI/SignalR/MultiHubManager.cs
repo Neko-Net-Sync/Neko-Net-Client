@@ -264,13 +264,18 @@ namespace NekoNetClient.WebAPI.SignalR
             await hub.StartAsync().ConfigureAwait(false);
             _hubs[svc] = hub;
             await PostConnectBootstrapAsync(svc, hub).ConfigureAwait(false);
+            var resolvedIndex = GetServerIndexForService(svc);
             try
             {
                 var conn = await GetConnectionInfoAsync(svc, CancellationToken.None).ConfigureAwait(false);
-                if (conn != null && conn.ServerInfo?.FileServerAddress != null)
+                if (conn != null)
                 {
-                    _svcCdn[svc] = conn.ServerInfo.FileServerAddress;
-                    Mediator.Publish(new ServiceConnectedMessage(svc, conn, GetServiceApiBase(svc)));
+                    if (conn.ServerInfo?.FileServerAddress != null)
+                    {
+                        _svcCdn[svc] = conn.ServerInfo.FileServerAddress;
+                    }
+
+                    Mediator.Publish(new ServiceConnectedMessage(svc, conn, resolvedIndex));
                 }
             }
             catch { }

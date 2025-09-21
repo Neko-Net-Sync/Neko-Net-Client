@@ -50,9 +50,17 @@ public class PairHandlerFactory
         {
             if (!string.IsNullOrEmpty(pair.ApiUrlOverride))
             {
-                var urls = _serverConfigManager.GetServerApiUrls();
-                var idx = Array.FindIndex(urls, u => string.Equals(u, pair.ApiUrlOverride, StringComparison.OrdinalIgnoreCase));
-                if (idx >= 0) serverIndex = idx;
+                var resolvedIndex = _serverConfigManager.FindServerIndexByHost(pair.ApiUrlOverride);
+                if (resolvedIndex.HasValue)
+                {
+                    serverIndex = resolvedIndex;
+                }
+                else
+                {
+                    var urls = _serverConfigManager.GetServerApiUrls();
+                    var idx = Array.FindIndex(urls, u => string.Equals(u, pair.ApiUrlOverride, StringComparison.OrdinalIgnoreCase));
+                    if (idx >= 0) serverIndex = idx;
+                }
             }
         }
         catch { }
