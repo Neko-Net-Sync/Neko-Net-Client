@@ -47,13 +47,15 @@ namespace NekoNetClient.WebAPI.SignalR
         private readonly ConcurrentDictionary<int, Uri> _cfgCdn = new();
         private readonly ConcurrentDictionary<int, DateTime> _cfgLastPush = new();
 
-        private sealed record ServiceSpec(string Endpoint, bool UseMareToken, bool WebSocketsOnly);
-        private static readonly Dictionary<SyncService, ServiceSpec> ServiceMap = new()
+        private static SyncServiceSpecifications.SyncServiceSpec GetServiceSpec(SyncService svc)
         {
-            { SyncService.NekoNet,  new ServiceSpec("wss://connect.neko-net.cc/mare",    true,  true) },
-            { SyncService.Lightless, new ServiceSpec("wss://sync.lightless-sync.org/lightless", true, true) },
-            { SyncService.TeraSync, new ServiceSpec("wss://tera.terasync.app/tera-sync-v2", true, true) },
-        };
+            if (!SyncServiceSpecifications.TryGetSpec(svc, out var spec))
+            {
+                throw new InvalidOperationException($"No service specification configured for {svc}");
+            }
+
+            return spec;
+        }
 
         public MultiHubManager(ILogger<MultiHubManager> logger,
             ServerConfigurationManager servers,
@@ -78,7 +80,7 @@ namespace NekoNetClient.WebAPI.SignalR
 
         public HubConnection? Get(SyncService svc) => _hubs.TryGetValue(svc, out var hub) ? hub : null;
         public HubConnectionState GetState(SyncService svc) => _hubs.TryGetValue(svc, out var hub) ? hub.State : HubConnectionState.Disconnected;
-        public string GetResolvedUrl(SyncService svc) => ServiceMap[svc].Endpoint;
+        public string GetResolvedUrl(SyncService svc) => GetServiceSpec(svc).Endpoint;
         public string? GetServiceCdnHost(SyncService svc)
             => _svcCdn.TryGetValue(svc, out var u) ? (u.IsDefaultPort ? u.Host : u.Host + ":" + u.Port) : null;
         public DateTime? GetServiceLastPushUtc(SyncService svc)
@@ -129,10 +131,7 @@ namespace NekoNetClient.WebAPI.SignalR
         }
 
         public int? GetServerIndexForService(SyncService svc)
-        {
-            // No fixed mapping in the new configured model; return null
-            return null;
-        }
+            => ResolveConfiguredServerIndex(svc);
 
         public async Task<(int? Online, string Shard)> GetServiceOnlineAsync(SyncService svc, CancellationToken ct)
         {
@@ -194,7 +193,7 @@ namespace NekoNetClient.WebAPI.SignalR
             {
                 var logger = _loggerFactory.CreateLogger<PairManager>();
                 // Derive a stable API base (scheme+host) from the service endpoint for per-service notes/tags
-                var endpoint = ServiceMap[s].Endpoint;
+                var endpoint = GetServiceSpec(s).Endpoint;
                 string apiBase;
                 try { var u = new Uri(endpoint); apiBase = u.GetLeftPart(UriPartial.Authority).Replace("ws://", "http://").Replace("wss://", "https://"); }
                 catch { apiBase = _servers.CurrentApiUrl; }
@@ -304,15 +303,47 @@ namespace NekoNetClient.WebAPI.SignalR
             catch { }
         }
 
+        private int? ResolveConfiguredServerIndex(SyncService svc)
+        {
+            var configured = _servers.FindServerIndexByService(svc);
+            if (configured.HasValue) return configured;
+
+            var host = SyncServiceSpecifications.GetCanonicalHost(svc);
+            if (!string.IsNullOrWhiteSpace(host))
+            {
+                var hostMatch = _servers.FindServerIndexByHost(host);
+                if (hostMatch.HasValue)
+                {
+                    return hostMatch;
+                }
+            }
+
+            var authority = SyncServiceSpecifications.GetCanonicalAuthority(svc);
+            if (!string.IsNullOrWhiteSpace(authority))
+            {
+                var authorityMatch = _servers.FindServerIndexByHost(authority);
+                if (authorityMatch.HasValue)
+                {
+                    return authorityMatch;
+                }
+            }
+
+            return null;
+        }
+
         private async Task<HubConnection> BuildHubAsync(SyncService svc, CancellationToken ct)
         {
-            var (endpoint, spec) = (ServiceMap[svc].Endpoint, ServiceMap[svc]);
+            var spec = GetServiceSpec(svc);
+            var endpoint = spec.Endpoint;
+            var configuredIndex = ResolveConfiguredServerIndex(svc);
             var builder = new HubConnectionBuilder()
                 .WithUrl(endpoint, opt =>
                 {
                     opt.Transports = HttpTransportType.WebSockets;
                     opt.SkipNegotiation = spec.WebSocketsOnly;
-                    opt.AccessTokenProvider = () => _tokens.GetOrUpdateToken(ct);
+                    opt.AccessTokenProvider = configuredIndex.HasValue
+                        ? () => _tokens.GetOrUpdateTokenForServer(configuredIndex.Value, ct)
+                        : () => _tokens.GetOrUpdateToken(ct);
                 })
                 .WithAutomaticReconnect();
 

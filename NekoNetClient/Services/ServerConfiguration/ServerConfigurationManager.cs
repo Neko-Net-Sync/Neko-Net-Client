@@ -8,6 +8,7 @@ using NekoNetClient.Services.Mediator;
 using NekoNetClient.WebAPI.SignalR;
 using Serilog.Core;
 using System.Diagnostics;
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
@@ -218,6 +219,68 @@ public class ServerConfigurationManager
     public string[] GetServerApiUrls()
     {
         return _configService.Current.ServerStorage.Select(v => v.ServerUri).ToArray();
+    }
+
+    public int? FindServerIndexByHost(string hostOrUrl)
+    {
+        var normalized = NormalizeHostOrAuthority(hostOrUrl);
+        if (string.IsNullOrEmpty(normalized)) return null;
+
+        var servers = _configService.Current.ServerStorage;
+        for (int i = 0; i < servers.Count; i++)
+        {
+            var candidate = NormalizeHostOrAuthority(servers[i].ServerUri);
+            if (candidate != null && string.Equals(candidate, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return null;
+    }
+
+    public int? FindServerIndexByService(SyncService service)
+    {
+        var host = SyncServiceSpecifications.GetCanonicalHost(service);
+        if (!string.IsNullOrWhiteSpace(host))
+        {
+            var hostMatch = FindServerIndexByHost(host);
+            if (hostMatch.HasValue)
+            {
+                return hostMatch;
+            }
+        }
+
+        var authority = SyncServiceSpecifications.GetCanonicalAuthority(service);
+        if (!string.IsNullOrWhiteSpace(authority))
+        {
+            var authorityMatch = FindServerIndexByHost(authority);
+            if (authorityMatch.HasValue)
+            {
+                return authorityMatch;
+            }
+        }
+
+        var path = SyncServiceSpecifications.GetCanonicalPath(service);
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            var normalizedPath = NormalizePath(path);
+            if (!string.IsNullOrEmpty(normalizedPath))
+            {
+                var servers = _configService.Current.ServerStorage;
+                for (var i = 0; i < servers.Count; i++)
+                {
+                    var configuredPath = NormalizePath(servers[i].ApiEndpoint);
+                    if (!string.IsNullOrEmpty(configuredPath)
+                        && string.Equals(configuredPath, normalizedPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return i;
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 
     // Expose servers for UI (read-only)
@@ -626,6 +689,52 @@ public class ServerConfigurationManager
             _notesConfig.Current.ServerNotes[apiUrl] = new();
         }
         return _notesConfig.Current.ServerNotes[apiUrl];
+    }
+
+    private static string? NormalizeHostOrAuthority(string? hostOrUrl)
+    {
+        if (string.IsNullOrWhiteSpace(hostOrUrl)) return null;
+
+        var value = hostOrUrl.Trim();
+        if (!value.Contains("://", StringComparison.Ordinal))
+        {
+            value = value.StartsWith("//", StringComparison.Ordinal)
+                ? "https:" + value
+                : "https://" + value.TrimStart('/');
+        }
+
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            return hostOrUrl.Trim();
+        }
+
+        var host = uri.Host;
+        if (!uri.IsDefaultPort)
+        {
+            host += ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
+        }
+
+        return host;
+    }
+
+    private static string NormalizePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+
+        var normalized = path.Trim();
+        if (normalized.Length == 0) return string.Empty;
+
+        if (normalized[0] != '/')
+        {
+            normalized = "/" + normalized;
+        }
+
+        if (normalized.Length > 1 && normalized.EndsWith('/', StringComparison.Ordinal))
+        {
+            normalized = normalized.TrimEnd('/');
+        }
+
+        return normalized;
     }
 
     private ServerTagStorage CurrentServerTagStorage()

@@ -49,16 +49,54 @@ internal sealed class ServiceSessionView
         _drawFactory = drawFactory;
     }
 
-    private static string ServiceLabel(SyncService svc) => svc switch
+    private string ServiceLabel(SyncService svc)
     {
-        SyncService.NekoNet => "NekoNet",
-        SyncService.Lightless => "Lightless",
-        SyncService.TeraSync => "TeraSync",
-        _ => svc.ToString()
-    };
+        var baseLabel = svc switch
+        {
+            SyncService.NekoNet => "NekoNet",
+            SyncService.Lightless => "Lightless",
+            SyncService.TeraSync => "TeraSync",
+            SyncService.PlayerSync => "PlayerSync",
+            _ => svc.ToString()
+        };
+
+        var idx = _multi.GetServerIndexForService(svc);
+        if (!idx.HasValue) return baseLabel;
+
+        try
+        {
+            var server = _servers.GetServerByIndex(idx.Value);
+            var configuredLabel = !string.IsNullOrWhiteSpace(server.ServerName)
+                ? server.ServerName
+                : BuildEndpointLabel(server.ServerUri, server.ApiEndpoint);
+
+            if (string.IsNullOrWhiteSpace(configuredLabel))
+            {
+                return baseLabel;
+            }
+
+            if (string.Equals(configuredLabel, baseLabel, StringComparison.OrdinalIgnoreCase))
+            {
+                return configuredLabel;
+            }
+
+            return $"{baseLabel} ({configuredLabel})";
+        }
+        catch
+        {
+            return baseLabel;
+        }
+    }
 
     public void DrawServiceHeader(SyncService svc)
     {
+        var displayLabel = ServiceLabel(svc);
+        if (!string.IsNullOrEmpty(displayLabel))
+        {
+            ImGuiHelpers.CenteredText(displayLabel);
+            ImGui.Spacing();
+        }
+
         var hubState = _multi.GetState(svc);
         var buttonSize = _ui.GetIconButtonSize(FontAwesomeIcon.Link);
 
@@ -129,7 +167,7 @@ internal sealed class ServiceSessionView
                 }
             }
         }
-        UiSharedService.AttachToolTip((connected ? "Disconnect" : "Connect") + " " + ServiceLabel(svc));
+        UiSharedService.AttachToolTip((connected ? "Disconnect" : "Connect") + " " + displayLabel);
     }
 
     public void Draw(SyncService svc)
@@ -253,6 +291,36 @@ internal sealed class ServiceSessionView
             return new UriBuilder(u.Scheme, u.Host, u.Port).Uri.ToString();
         }
         catch { return _servers.CurrentApiUrl; }
+    }
+
+    private static string? BuildEndpointLabel(string? serverUri, string? apiEndpoint)
+    {
+        if (string.IsNullOrWhiteSpace(serverUri)) return null;
+
+        try
+        {
+            var uri = new Uri(serverUri);
+            var host = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
+            var endpoint = string.IsNullOrWhiteSpace(apiEndpoint) ? string.Empty : apiEndpoint.Trim();
+            if (!string.IsNullOrEmpty(endpoint))
+            {
+                if (endpoint[0] != '/') endpoint = "/" + endpoint;
+                if (!string.Equals(endpoint, "/", StringComparison.Ordinal))
+                    return host + endpoint;
+            }
+            return host;
+        }
+        catch
+        {
+            if (string.IsNullOrWhiteSpace(apiEndpoint))
+            {
+                return serverUri;
+            }
+
+            var endpoint = apiEndpoint.Trim();
+            if (endpoint.Length > 0 && endpoint[0] != '/') endpoint = "/" + endpoint;
+            return serverUri + endpoint;
+        }
     }
 
     private List<IDrawFolder> BuildFolders(PairManager pm, TagHandler tagHandler, IApiActionRouter router, string filter)
