@@ -1,6 +1,7 @@
 ﻿using Dalamud.Utility;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.Extensions.Logging;
+using NekoNet.API.Data.Enum;
 using NekoNet.API.Routes;
 using NekoNetClient.MareConfiguration;
 using NekoNetClient.MareConfiguration.Models;
@@ -8,12 +9,12 @@ using NekoNetClient.Services.Mediator;
 using NekoNetClient.WebAPI.SignalR;
 using Serilog.Core;
 using System.Diagnostics;
-using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace NekoNetClient.Services.ServerConfiguration;
 
@@ -46,22 +47,18 @@ public class ServerConfigurationManager
     {
         try
         {
-            var uri = new Uri(serverUri);
-            var domain = uri.Host.ToLowerInvariant();
-
-            return domain switch
+            if (SyncServiceSpecifications.TryResolveServiceByHost(serverUri, out var service) &&
+                SyncServiceSpecifications.TryGet(service, out var specification))
             {
-                "connect.neko-net.cc" => "/mare",
-                "sync.lightless-sync.org" => "/lightless",
-                "tera.terasync.app" => "/tera-sync-v2",
-                _ => "/mare" // Default endpoint
-            };
+                return specification.ApiPath;
+            }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to parse domain from {uri}, using default endpoint", serverUri);
-            return "/mare";
         }
+
+        return "/mare";
     }
     public string CurrentApiUrl => CurrentServer.ServerUri;
     public ServerStorage CurrentServer => _configService.Current.ServerStorage[CurrentServerIndex];
@@ -221,16 +218,27 @@ public class ServerConfigurationManager
         return _configService.Current.ServerStorage.Select(v => v.ServerUri).ToArray();
     }
 
-    public int? FindServerIndexByHost(string hostOrUrl)
+    public int? FindServerIndexByHost(string? hostOrUrl)
     {
-        var normalized = NormalizeHostOrAuthority(hostOrUrl);
-        if (string.IsNullOrEmpty(normalized)) return null;
-
-        var servers = _configService.Current.ServerStorage;
-        for (int i = 0; i < servers.Count; i++)
+        if (!SyncServiceSpecifications.TryResolveServiceByHost(hostOrUrl, out var service))
         {
-            var candidate = NormalizeHostOrAuthority(servers[i].ServerUri);
-            if (candidate != null && string.Equals(candidate, normalized, StringComparison.OrdinalIgnoreCase))
+            return null;
+        }
+
+        return FindServerIndexByService(service);
+    }
+
+    public int? FindServerIndexByService(SyncService service)
+    {
+        if (!SyncServiceSpecifications.TryGet(service, out var specification))
+        {
+            return null;
+        }
+
+        for (var i = 0; i < _configService.Current.ServerStorage.Count; i++)
+        {
+            var server = _configService.Current.ServerStorage[i];
+            if (IsMatch(server, specification))
             {
                 return i;
             }
@@ -239,48 +247,41 @@ public class ServerConfigurationManager
         return null;
     }
 
-    public int? FindServerIndexByService(SyncService service)
+    private bool IsMatch(ServerStorage server, SyncServiceSpecifications.Specification specification)
     {
-        var host = SyncServiceSpecifications.GetCanonicalHost(service);
-        if (!string.IsNullOrWhiteSpace(host))
+        if (string.IsNullOrWhiteSpace(server.ServerUri))
         {
-            var hostMatch = FindServerIndexByHost(host);
-            if (hostMatch.HasValue)
+            return false;
+        }
+
+        var host = SyncServiceSpecifications.NormalizeHostOrAuthority(server.ServerUri);
+        if (host != null && specification.Hosts.Contains(host))
+        {
+            return true;
+        }
+
+        var configuredPath = ResolveConfiguredApiPath(server);
+        return !string.IsNullOrEmpty(configuredPath) &&
+               string.Equals(configuredPath, specification.ApiPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string ResolveConfiguredApiPath(ServerStorage server)
+    {
+        if (!string.IsNullOrWhiteSpace(server.ApiEndpoint))
+        {
+            return SyncServiceSpecifications.NormalizePath(server.ApiEndpoint);
+        }
+
+        if (Uri.TryCreate(server.ServerUri, UriKind.Absolute, out var uri))
+        {
+            var absolute = SyncServiceSpecifications.NormalizePath(uri.AbsolutePath);
+            if (!string.IsNullOrEmpty(absolute))
             {
-                return hostMatch;
+                return absolute;
             }
         }
 
-        var authority = SyncServiceSpecifications.GetCanonicalAuthority(service);
-        if (!string.IsNullOrWhiteSpace(authority))
-        {
-            var authorityMatch = FindServerIndexByHost(authority);
-            if (authorityMatch.HasValue)
-            {
-                return authorityMatch;
-            }
-        }
-
-        var path = SyncServiceSpecifications.GetCanonicalPath(service);
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            var normalizedPath = NormalizePath(path);
-            if (!string.IsNullOrEmpty(normalizedPath))
-            {
-                var servers = _configService.Current.ServerStorage;
-                for (var i = 0; i < servers.Count; i++)
-                {
-                    var configuredPath = NormalizePath(servers[i].ApiEndpoint);
-                    if (!string.IsNullOrEmpty(configuredPath)
-                        && string.Equals(configuredPath, normalizedPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return i;
-                    }
-                }
-            }
-        }
-
-        return null;
+        return SyncServiceSpecifications.NormalizePath(GetApiEndpointForDomain(server.ServerUri));
     }
 
     // Expose servers for UI (read-only)
@@ -689,52 +690,6 @@ public class ServerConfigurationManager
             _notesConfig.Current.ServerNotes[apiUrl] = new();
         }
         return _notesConfig.Current.ServerNotes[apiUrl];
-    }
-
-    private static string? NormalizeHostOrAuthority(string? hostOrUrl)
-    {
-        if (string.IsNullOrWhiteSpace(hostOrUrl)) return null;
-
-        var value = hostOrUrl.Trim();
-        if (!value.Contains("://", StringComparison.Ordinal))
-        {
-            value = value.StartsWith("//", StringComparison.Ordinal)
-                ? "https:" + value
-                : "https://" + value.TrimStart('/');
-        }
-
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
-        {
-            return hostOrUrl.Trim();
-        }
-
-        var host = uri.Host;
-        if (!uri.IsDefaultPort)
-        {
-            host += ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
-        }
-
-        return host;
-    }
-
-    private static string NormalizePath(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
-
-        var normalized = path.Trim();
-        if (normalized.Length == 0) return string.Empty;
-
-        if (normalized[0] != '/')
-        {
-            normalized = "/" + normalized;
-        }
-
-        if (normalized.Length > 1 && normalized.EndsWith('/', StringComparison.Ordinal))
-        {
-            normalized = normalized.TrimEnd('/');
-        }
-
-        return normalized;
     }
 
     private ServerTagStorage CurrentServerTagStorage()

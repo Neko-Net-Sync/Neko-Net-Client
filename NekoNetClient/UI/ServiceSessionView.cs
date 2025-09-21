@@ -15,6 +15,7 @@ using NekoNetClient.Services.ServerConfiguration;
 using NekoNetClient.UI.Components;
 using NekoNetClient.UI.Handlers;
 using NekoNetClient.WebAPI.SignalR;
+using NekoNetClient.Utils;
 using System.Collections.Immutable;
 using System.Numerics;
 
@@ -49,53 +50,65 @@ internal sealed class ServiceSessionView
         _drawFactory = drawFactory;
     }
 
-    private string ServiceLabel(SyncService svc)
+    private static string DefaultServiceLabel(SyncService svc) => svc switch
     {
-        var baseLabel = svc switch
-        {
-            SyncService.NekoNet => "NekoNet",
-            SyncService.Lightless => "Lightless",
-            SyncService.TeraSync => "TeraSync",
-            SyncService.PlayerSync => "PlayerSync",
-            _ => svc.ToString()
-        };
+        SyncService.NekoNet => "NekoNet",
+        SyncService.Lightless => "Lightless",
+        SyncService.TeraSync => "TeraSync",
+        _ => svc.ToString()
+    };
 
-        var idx = _multi.GetServerIndexForService(svc);
-        if (!idx.HasValue) return baseLabel;
-
+    private string GetConfiguredServerLabel(int serverIndex)
+    {
         try
         {
-            var server = _servers.GetServerByIndex(idx.Value);
-            var configuredLabel = !string.IsNullOrWhiteSpace(server.ServerName)
-                ? server.ServerName
-                : BuildEndpointLabel(server.ServerUri, server.ApiEndpoint);
-
-            if (string.IsNullOrWhiteSpace(configuredLabel))
+            var server = _servers.GetServerByIndex(serverIndex);
+            if (!string.IsNullOrWhiteSpace(server.ServerName))
             {
-                return baseLabel;
+                return server.ServerName;
             }
 
-            if (string.Equals(configuredLabel, baseLabel, StringComparison.OrdinalIgnoreCase))
-            {
-                return configuredLabel;
-            }
-
-            return $"{baseLabel} ({configuredLabel})";
+            return server.ServerUri.ToServerLabel();
         }
         catch
         {
+            return $"Server #{serverIndex}";
+        }
+    }
+
+    private string BuildServiceHeaderLabel(SyncService svc, out int? serverIndex)
+    {
+        var baseLabel = DefaultServiceLabel(svc);
+        var idx = _multi.GetServerIndexForService(svc);
+        serverIndex = idx;
+
+        if (!idx.HasValue)
+        {
+            return baseLabel;
+        }
+
+        try
+        {
+            var serverLabel = GetConfiguredServerLabel(idx.Value);
+            return string.Equals(serverLabel, baseLabel, StringComparison.Ordinal)
+                ? serverLabel
+                : $"{serverLabel} ({baseLabel})";
+        }
+        catch
+        {
+            serverIndex = null;
             return baseLabel;
         }
     }
 
     public void DrawServiceHeader(SyncService svc)
     {
-        var displayLabel = ServiceLabel(svc);
-        if (!string.IsNullOrEmpty(displayLabel))
-        {
-            ImGuiHelpers.CenteredText(displayLabel);
-            ImGui.Spacing();
-        }
+        var headerLabel = BuildServiceHeaderLabel(svc, out _);
+        var labelSize = ImGui.CalcTextSize(headerLabel);
+        var centerX = (ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2f;
+        ImGui.SetCursorPosX(centerX - labelSize.X / 2f);
+        ImGui.TextUnformatted(headerLabel);
+        ImGui.Dummy(new Vector2(0, ImGui.GetStyle().ItemSpacing.Y * 0.5f));
 
         var hubState = _multi.GetState(svc);
         var buttonSize = _ui.GetIconButtonSize(FontAwesomeIcon.Link);
@@ -167,7 +180,7 @@ internal sealed class ServiceSessionView
                 }
             }
         }
-        UiSharedService.AttachToolTip((connected ? "Disconnect" : "Connect") + " " + displayLabel);
+        UiSharedService.AttachToolTip((connected ? "Disconnect" : "Connect") + " " + headerLabel);
     }
 
     public void Draw(SyncService svc)
@@ -291,36 +304,6 @@ internal sealed class ServiceSessionView
             return new UriBuilder(u.Scheme, u.Host, u.Port).Uri.ToString();
         }
         catch { return _servers.CurrentApiUrl; }
-    }
-
-    private static string? BuildEndpointLabel(string? serverUri, string? apiEndpoint)
-    {
-        if (string.IsNullOrWhiteSpace(serverUri)) return null;
-
-        try
-        {
-            var uri = new Uri(serverUri);
-            var host = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
-            var endpoint = string.IsNullOrWhiteSpace(apiEndpoint) ? string.Empty : apiEndpoint.Trim();
-            if (!string.IsNullOrEmpty(endpoint))
-            {
-                if (endpoint[0] != '/') endpoint = "/" + endpoint;
-                if (!string.Equals(endpoint, "/", StringComparison.Ordinal))
-                    return host + endpoint;
-            }
-            return host;
-        }
-        catch
-        {
-            if (string.IsNullOrWhiteSpace(apiEndpoint))
-            {
-                return serverUri;
-            }
-
-            var endpoint = apiEndpoint.Trim();
-            if (endpoint.Length > 0 && endpoint[0] != '/') endpoint = "/" + endpoint;
-            return serverUri + endpoint;
-        }
     }
 
     private List<IDrawFolder> BuildFolders(PairManager pm, TagHandler tagHandler, IApiActionRouter router, string filter)
