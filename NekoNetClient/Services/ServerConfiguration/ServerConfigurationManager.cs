@@ -1,6 +1,7 @@
 ﻿using Dalamud.Utility;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.Extensions.Logging;
+using NekoNet.API.Data.Enum;
 using NekoNet.API.Routes;
 using NekoNetClient.MareConfiguration;
 using NekoNetClient.MareConfiguration.Models;
@@ -13,6 +14,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace NekoNetClient.Services.ServerConfiguration;
 
@@ -45,22 +47,18 @@ public class ServerConfigurationManager
     {
         try
         {
-            var uri = new Uri(serverUri);
-            var domain = uri.Host.ToLowerInvariant();
-
-            return domain switch
+            if (SyncServiceSpecifications.TryResolveServiceByHost(serverUri, out var service) &&
+                SyncServiceSpecifications.TryGet(service, out var specification))
             {
-                "connect.neko-net.cc" => "/mare",
-                "sync.lightless-sync.org" => "/lightless",
-                "tera.terasync.app" => "/tera-sync-v2",
-                _ => "/mare" // Default endpoint
-            };
+                return specification.ApiPath;
+            }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to parse domain from {uri}, using default endpoint", serverUri);
-            return "/mare";
         }
+
+        return "/mare";
     }
     public string CurrentApiUrl => CurrentServer.ServerUri;
     public ServerStorage CurrentServer => _configService.Current.ServerStorage[CurrentServerIndex];
@@ -218,6 +216,72 @@ public class ServerConfigurationManager
     public string[] GetServerApiUrls()
     {
         return _configService.Current.ServerStorage.Select(v => v.ServerUri).ToArray();
+    }
+
+    public int? FindServerIndexByHost(string? hostOrUrl)
+    {
+        if (!SyncServiceSpecifications.TryResolveServiceByHost(hostOrUrl, out var service))
+        {
+            return null;
+        }
+
+        return FindServerIndexByService(service);
+    }
+
+    public int? FindServerIndexByService(SyncService service)
+    {
+        if (!SyncServiceSpecifications.TryGet(service, out var specification))
+        {
+            return null;
+        }
+
+        for (var i = 0; i < _configService.Current.ServerStorage.Count; i++)
+        {
+            var server = _configService.Current.ServerStorage[i];
+            if (IsMatch(server, specification))
+            {
+                return i;
+            }
+        }
+
+        return null;
+    }
+
+    private bool IsMatch(ServerStorage server, SyncServiceSpecifications.Specification specification)
+    {
+        if (string.IsNullOrWhiteSpace(server.ServerUri))
+        {
+            return false;
+        }
+
+        var host = SyncServiceSpecifications.NormalizeHostOrAuthority(server.ServerUri);
+        if (host != null && specification.Hosts.Contains(host))
+        {
+            return true;
+        }
+
+        var configuredPath = ResolveConfiguredApiPath(server);
+        return !string.IsNullOrEmpty(configuredPath) &&
+               string.Equals(configuredPath, specification.ApiPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string ResolveConfiguredApiPath(ServerStorage server)
+    {
+        if (!string.IsNullOrWhiteSpace(server.ApiEndpoint))
+        {
+            return SyncServiceSpecifications.NormalizePath(server.ApiEndpoint);
+        }
+
+        if (Uri.TryCreate(server.ServerUri, UriKind.Absolute, out var uri))
+        {
+            var absolute = SyncServiceSpecifications.NormalizePath(uri.AbsolutePath);
+            if (!string.IsNullOrEmpty(absolute))
+            {
+                return absolute;
+            }
+        }
+
+        return SyncServiceSpecifications.NormalizePath(GetApiEndpointForDomain(server.ServerUri));
     }
 
     // Expose servers for UI (read-only)

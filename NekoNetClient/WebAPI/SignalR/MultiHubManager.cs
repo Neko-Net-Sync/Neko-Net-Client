@@ -10,7 +10,9 @@ using NekoNetClient.MareConfiguration;
 using NekoNetClient.PlayerData.Factories;
 using NekoNetClient.PlayerData.Pairs;
 using NekoNetClient.Services.Mediator;
+using NekoNetClient.Services.Events;
 using NekoNetClient.Services.ServerConfiguration;
+using NekoNetClient.Utils;
 using Dalamud.Plugin.Services;
 using System;
 using System.Collections.Concurrent;
@@ -47,14 +49,6 @@ namespace NekoNetClient.WebAPI.SignalR
         private readonly ConcurrentDictionary<int, Uri> _cfgCdn = new();
         private readonly ConcurrentDictionary<int, DateTime> _cfgLastPush = new();
 
-        private sealed record ServiceSpec(string Endpoint, bool UseMareToken, bool WebSocketsOnly);
-        private static readonly Dictionary<SyncService, ServiceSpec> ServiceMap = new()
-        {
-            { SyncService.NekoNet,  new ServiceSpec("wss://connect.neko-net.cc/mare",    true,  true) },
-            { SyncService.Lightless, new ServiceSpec("wss://sync.lightless-sync.org/lightless", true, true) },
-            { SyncService.TeraSync, new ServiceSpec("wss://tera.terasync.app/tera-sync-v2", true, true) },
-        };
-
         public MultiHubManager(ILogger<MultiHubManager> logger,
             ServerConfigurationManager servers,
             TokenProvider tokens,
@@ -78,7 +72,7 @@ namespace NekoNetClient.WebAPI.SignalR
 
         public HubConnection? Get(SyncService svc) => _hubs.TryGetValue(svc, out var hub) ? hub : null;
         public HubConnectionState GetState(SyncService svc) => _hubs.TryGetValue(svc, out var hub) ? hub.State : HubConnectionState.Disconnected;
-        public string GetResolvedUrl(SyncService svc) => ServiceMap[svc].Endpoint;
+        public string GetResolvedUrl(SyncService svc) => SyncServiceSpecifications.Get(svc).HubEndpoint;
         public string? GetServiceCdnHost(SyncService svc)
             => _svcCdn.TryGetValue(svc, out var u) ? (u.IsDefaultPort ? u.Host : u.Host + ":" + u.Port) : null;
         public DateTime? GetServiceLastPushUtc(SyncService svc)
@@ -130,8 +124,7 @@ namespace NekoNetClient.WebAPI.SignalR
 
         public int? GetServerIndexForService(SyncService svc)
         {
-            // No fixed mapping in the new configured model; return null
-            return null;
+            return _servers.FindServerIndexByService(svc);
         }
 
         public async Task<(int? Online, string Shard)> GetServiceOnlineAsync(SyncService svc, CancellationToken ct)
@@ -193,15 +186,22 @@ namespace NekoNetClient.WebAPI.SignalR
             return _svcPairManagers.GetOrAdd(svc, s =>
             {
                 var logger = _loggerFactory.CreateLogger<PairManager>();
-                // Derive a stable API base (scheme+host) from the service endpoint for per-service notes/tags
-                var endpoint = ServiceMap[s].Endpoint;
-                string apiBase;
-                try { var u = new Uri(endpoint); apiBase = u.GetLeftPart(UriPartial.Authority).Replace("ws://", "http://").Replace("wss://", "https://"); }
-                catch { apiBase = _servers.CurrentApiUrl; }
+                var apiBase = GetServiceApiBase(s);
                 return new PairManager(logger, _pairFactory, _cfg, Mediator, _contextMenu, apiUrlOverride: apiBase, serviceScoped: true);
             });
         }
 
+        private string GetServiceApiBase(SyncService svc)
+        {
+            try
+            {
+                return SyncServiceSpecifications.Get(svc).ApiBase;
+            }
+            catch
+            {
+                return _servers.CurrentApiUrl.TrimEnd('/');
+            }
+        }
         public PairManager GetPairManagerForConfigured(int serverIndex)
         {
             return _cfgPairManagers.GetOrAdd(serverIndex, idx =>
@@ -219,6 +219,12 @@ namespace NekoNetClient.WebAPI.SignalR
         {
             if (_hubs.TryGetValue(svc, out var hub))
             {
+                try
+                {
+                    Mediator.Publish(new EventMessage(new Event(nameof(MultiHubManager), EventSeverity.Informational,
+                        $"Disconnecting service {svc}") { Server = GetServiceApiBase(svc).ToServerLabel() }));
+                }
+                catch { }
                 try { await hub.StopAsync().ConfigureAwait(false); } catch { }
             }
             _hubs.TryRemove(svc, out _);
@@ -232,6 +238,13 @@ namespace NekoNetClient.WebAPI.SignalR
         {
             if (_cfgHubs.TryGetValue(serverIndex, out var hub))
             {
+                try
+                {
+                    var s = _servers.GetServerByIndex(serverIndex);
+                    Mediator.Publish(new EventMessage(new Event(nameof(MultiHubManager), EventSeverity.Informational,
+                        $"Disconnecting configured server #{serverIndex}") { Server = s.ServerUri.ToServerLabel() }));
+                }
+                catch { }
                 try { await hub.StopAsync().ConfigureAwait(false); } catch { }
             }
             _cfgHubs.TryRemove(serverIndex, out _);
@@ -248,6 +261,7 @@ namespace NekoNetClient.WebAPI.SignalR
         {
             var hub = await BuildHubAsync(svc, CancellationToken.None).ConfigureAwait(false);
             await hub.StartAsync().ConfigureAwait(false);
+            _hubs[svc] = hub;
             await PostConnectBootstrapAsync(svc, hub).ConfigureAwait(false);
             try
             {
@@ -255,17 +269,17 @@ namespace NekoNetClient.WebAPI.SignalR
                 if (conn != null && conn.ServerInfo?.FileServerAddress != null)
                 {
                     _svcCdn[svc] = conn.ServerInfo.FileServerAddress;
-                    Mediator.Publish(new ServiceConnectedMessage(svc, conn));
+                    Mediator.Publish(new ServiceConnectedMessage(svc, conn, GetServiceApiBase(svc)));
                 }
             }
             catch { }
-            _hubs[svc] = hub;
         }
 
         public async Task ConnectConfiguredAsync(int serverIndex)
         {
             var hub = await BuildConfiguredHubAsync(serverIndex, CancellationToken.None).ConfigureAwait(false);
             await hub.StartAsync().ConfigureAwait(false);
+            _cfgHubs[serverIndex] = hub;
             await PostConnectBootstrapConfiguredAsync(serverIndex, hub).ConfigureAwait(false);
             // Get ConnectionDto to obtain FileServerAddress for this configured server
             try
@@ -279,7 +293,6 @@ namespace NekoNetClient.WebAPI.SignalR
                 }
             }
             catch { }
-            _cfgHubs[serverIndex] = hub;
         }
 
         public async Task PushCharacterDataAsync(SyncService svc, CharacterData data, List<UserData> recipients, CensusDataDto? census = null)
@@ -306,13 +319,17 @@ namespace NekoNetClient.WebAPI.SignalR
 
         private async Task<HubConnection> BuildHubAsync(SyncService svc, CancellationToken ct)
         {
-            var (endpoint, spec) = (ServiceMap[svc].Endpoint, ServiceMap[svc]);
+            var spec = SyncServiceSpecifications.Get(svc);
+            var resolvedIndex = GetServerIndexForService(svc);
+
             var builder = new HubConnectionBuilder()
-                .WithUrl(endpoint, opt =>
+                .WithUrl(spec.HubEndpoint, opt =>
                 {
                     opt.Transports = HttpTransportType.WebSockets;
-                    opt.SkipNegotiation = spec.WebSocketsOnly;
-                    opt.AccessTokenProvider = () => _tokens.GetOrUpdateToken(ct);
+                    opt.SkipNegotiation = spec.RequiresWebSockets;
+                    opt.AccessTokenProvider = resolvedIndex.HasValue
+                        ? () => _tokens.GetOrUpdateTokenForServer(resolvedIndex.Value, ct)
+                        : () => _tokens.GetOrUpdateToken(ct);
                 })
                 .WithAutomaticReconnect();
 

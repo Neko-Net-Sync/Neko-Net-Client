@@ -15,6 +15,7 @@ using NekoNetClient.Services.ServerConfiguration;
 using NekoNetClient.UI.Components;
 using NekoNetClient.UI.Handlers;
 using NekoNetClient.WebAPI.SignalR;
+using NekoNetClient.Utils;
 using System.Collections.Immutable;
 using System.Numerics;
 
@@ -49,7 +50,7 @@ internal sealed class ServiceSessionView
         _drawFactory = drawFactory;
     }
 
-    private static string ServiceLabel(SyncService svc) => svc switch
+    private static string DefaultServiceLabel(SyncService svc) => svc switch
     {
         SyncService.NekoNet => "NekoNet",
         SyncService.Lightless => "Lightless",
@@ -57,8 +58,58 @@ internal sealed class ServiceSessionView
         _ => svc.ToString()
     };
 
+    private string GetConfiguredServerLabel(int serverIndex)
+    {
+        try
+        {
+            var server = _servers.GetServerByIndex(serverIndex);
+            if (!string.IsNullOrWhiteSpace(server.ServerName))
+            {
+                return server.ServerName;
+            }
+
+            return server.ServerUri.ToServerLabel();
+        }
+        catch
+        {
+            return $"Server #{serverIndex}";
+        }
+    }
+
+    private string BuildServiceHeaderLabel(SyncService svc, out int? serverIndex)
+    {
+        var baseLabel = DefaultServiceLabel(svc);
+        var idx = _multi.GetServerIndexForService(svc);
+        serverIndex = idx;
+
+        if (!idx.HasValue)
+        {
+            return baseLabel;
+        }
+
+        try
+        {
+            var serverLabel = GetConfiguredServerLabel(idx.Value);
+            return string.Equals(serverLabel, baseLabel, StringComparison.Ordinal)
+                ? serverLabel
+                : $"{serverLabel} ({baseLabel})";
+        }
+        catch
+        {
+            serverIndex = null;
+            return baseLabel;
+        }
+    }
+
     public void DrawServiceHeader(SyncService svc)
     {
+        var headerLabel = BuildServiceHeaderLabel(svc, out _);
+        var labelSize = ImGui.CalcTextSize(headerLabel);
+        var centerX = (ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2f;
+        ImGui.SetCursorPosX(centerX - labelSize.X / 2f);
+        ImGui.TextUnformatted(headerLabel);
+        ImGui.Dummy(new Vector2(0, ImGui.GetStyle().ItemSpacing.Y * 0.5f));
+
         var hubState = _multi.GetState(svc);
         var buttonSize = _ui.GetIconButtonSize(FontAwesomeIcon.Link);
 
@@ -129,7 +180,7 @@ internal sealed class ServiceSessionView
                 }
             }
         }
-        UiSharedService.AttachToolTip((connected ? "Disconnect" : "Connect") + " " + ServiceLabel(svc));
+        UiSharedService.AttachToolTip((connected ? "Disconnect" : "Connect") + " " + headerLabel);
     }
 
     public void Draw(SyncService svc)
