@@ -75,7 +75,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
     public List<FileTransfer> ForbiddenTransfers => _orchestrator.ForbiddenTransfers;
 
-    public bool IsDownloading => !CurrentDownloads.Any();
+    public bool IsDownloading => CurrentDownloads.Any();
 
     public static void MungeBuffer(Span<byte> buffer)
     {
@@ -281,6 +281,21 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
         CurrentDownloads = downloadFileInfoFromService.Distinct().Select(d => new DownloadFileTransfer(d))
             .Where(d => d.CanBeTransferred).ToList();
+
+        // Register all hosts involved so token routing can pick the correct server index even in service-only flows
+        try
+        {
+            var hosts = CurrentDownloads.Select(d => d.DownloadUri)
+                .Where(u => u != null)
+                .DistinctBy(u => (u!.Host, u.Port))
+                .Cast<Uri>()
+                .ToList();
+            if (hosts.Count > 0)
+            {
+                _orchestrator.RegisterServiceHosts(_serviceApiBase, hosts);
+            }
+        }
+        catch { }
 
         // Report prepared file count and first target URI for visibility
         try

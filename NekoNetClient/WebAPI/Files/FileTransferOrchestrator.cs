@@ -82,9 +82,23 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
                     {
                         _cdnByServiceApiBase[baseKey] = fallback;
                     }
+                    // Also map the base API host to the matching configured server index for token routing
+                    var idx = FindServerIndexByApiBase(baseKey);
+                    if (idx.HasValue)
+                    {
+                        var baseHostKey = fallback.IsDefaultPort ? fallback.Host : $"{fallback.Host}:{fallback.Port}";
+                        _serverIdxByHost[baseHostKey] = idx.Value;
+                    }
                     return;
                 }
                 _cdnByServiceApiBase[baseKey] = cdn;
+                // Map CDN host to the configured server index (so token provider chooses the right token)
+                var serverIdx = FindServerIndexByApiBase(baseKey);
+                if (serverIdx.HasValue)
+                {
+                    var hostKey = cdn.IsDefaultPort ? cdn.Host : $"{cdn.Host}:{cdn.Port}";
+                    _serverIdxByHost[hostKey] = serverIdx.Value;
+                }
             }
             catch { }
         });
@@ -116,6 +130,24 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
     }
     public List<FileTransfer> ForbiddenTransfers { get; } = [];
     public bool IsInitialized => FilesCdnUri != null;
+
+    // Register multiple CDN hosts for a given service API base to route tokens correctly
+    public void RegisterServiceHosts(string? serviceApiBase, IEnumerable<Uri> hosts)
+    {
+        var baseKey = NormalizeApiBase(serviceApiBase);
+        if (string.IsNullOrEmpty(baseKey)) return;
+        var idx = FindServerIndexByApiBase(baseKey);
+        if (!idx.HasValue) return;
+        foreach (var h in hosts)
+        {
+            try
+            {
+                var key = h.IsDefaultPort ? h.Host : $"{h.Host}:{h.Port}";
+                _serverIdxByHost[key] = idx.Value;
+            }
+            catch { }
+        }
+    }
 
     public void ClearDownloadRequest(Guid guid)
     {
@@ -272,6 +304,30 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
             Logger.LogWarning(ex, "Error during SendRequestInternal for {uri}", requestMessage.RequestUri);
             throw;
         }
+    }
+
+    private int? FindServerIndexByApiBase(string baseApi)
+    {
+        try
+        {
+            if (!Uri.TryCreate(baseApi, UriKind.Absolute, out var apiUri)) return null;
+            var host = apiUri.Host;
+            var count = _servers.GetServerCount();
+            for (int i = 0; i < count; i++)
+            {
+                try
+                {
+                    var srv = _servers.GetServerByIndex(i);
+                    if (Uri.TryCreate(srv.ServerUri, UriKind.Absolute, out var srvUri))
+                    {
+                        if (string.Equals(srvUri.Host, host, StringComparison.OrdinalIgnoreCase)) return i;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return null;
     }
 }
 
