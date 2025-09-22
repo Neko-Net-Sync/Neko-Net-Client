@@ -149,14 +149,24 @@ public partial class ApiController
     public Task Client_UserSendOffline(UserDto dto)
     {
         Logger.LogDebug("Client_UserSendOffline: {dto}", dto);
-        ExecuteSafely(() => _pairManager.MarkPairOffline(dto.User));
+        ExecuteSafely(() =>
+        {
+            var key = GetResolvedUrl();
+            _rolling.Offline(dto.User.UID, key);
+            _pairManager.MarkPairOffline(dto.User);
+        });
         return Task.CompletedTask;
     }
 
     public Task Client_UserSendOnline(OnlineUserIdentDto dto)
     {
         Logger.LogDebug("Client_UserSendOnline: {dto}", dto);
-        ExecuteSafely(() => _pairManager.MarkPairOnline(dto));
+        ExecuteSafely(() =>
+        {
+            _pairManager.MarkPairOnline(dto);
+            var key = GetResolvedUrl();
+            _rolling.Online(dto.User.UID, key);
+        });
         return Task.CompletedTask;
     }
 

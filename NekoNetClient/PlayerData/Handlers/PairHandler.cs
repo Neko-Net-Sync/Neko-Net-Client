@@ -585,6 +585,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             if (pc == default((string, nint))) return;
             Logger.LogDebug("One-Time Initializing {this}", this);
             Initialize(pc.Name);
+            try { Mediator.Publish(new PlayerNameKnownMessage(Pair.UserData.UID, pc.Name)); } catch { }
             Logger.LogDebug("One-Time Initialized {this}", this);
             Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Informational,
                 $"Initializing User For Character {pc.Name}") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));

@@ -289,6 +289,18 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             {
                 var first = CurrentDownloads[0];
                 PublishDownloadEvent(EventSeverity.Informational, $"Prepared {CurrentDownloads.Count} files for download", uri: first.DownloadUri);
+
+                // Summarize CDN distribution by host for visibility
+                try
+                {
+                    var byHost = CurrentDownloads.GroupBy(d => d.DownloadUri.Host + ":" + d.DownloadUri.Port)
+                        .Select(g => $"{g.Key}={g.Count()}").ToList();
+                    if (byHost.Count > 0)
+                    {
+                        PublishDownloadEvent(EventSeverity.Informational, "CDN distribution: " + string.Join(", ", byHost), uri: first.DownloadUri);
+                    }
+                }
+                catch { }
             }
             else
             {

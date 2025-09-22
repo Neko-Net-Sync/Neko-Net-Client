@@ -99,10 +99,12 @@ public sealed class Plugin : IDalamudPlugin
                 s.GetRequiredService<ILoggerFactory>(),
                 s.GetRequiredService<PairFactory>(),
                 s.GetRequiredService<MareConfigService>(),
-                contextMenu
+                contextMenu,
+                s.GetRequiredService<NekoNetClient.Services.Sync.RollingSyncRegistry>()
             ));
             collection.AddSingleton<IContextMenu>(contextMenu);
             collection.AddSingleton<Services.Sync.MultiSessionManager>();
+            collection.AddSingleton<NekoNetClient.Services.Sync.RollingSyncRegistry>();
 
 
             // add mare related singletons

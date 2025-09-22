@@ -33,6 +33,7 @@ namespace NekoNetClient.WebAPI.SignalR
         private readonly MareConfigService _cfg;
         private readonly ILoggerFactory _loggerFactory;
         private readonly IContextMenu _contextMenu;
+    private readonly NekoNetClient.Services.Sync.RollingSyncRegistry _rolling;
 
         private readonly ConcurrentDictionary<SyncService, HubConnection> _hubs = new();
         private readonly ConcurrentDictionary<SyncService, PairManager> _svcPairManagers = new();
@@ -65,7 +66,8 @@ namespace NekoNetClient.WebAPI.SignalR
             ILoggerFactory loggerFactory,
             PairFactory pairFactory,
             MareConfigService cfg,
-            IContextMenu contextMenu)
+            IContextMenu contextMenu,
+            NekoNetClient.Services.Sync.RollingSyncRegistry rolling)
             : base(logger, mediator)
         {
             _log = logger;
@@ -76,6 +78,7 @@ namespace NekoNetClient.WebAPI.SignalR
             _pairFactory = pairFactory;
             _cfg = cfg;
             _contextMenu = contextMenu;
+            _rolling = rolling;
         }
 
         public HubConnection? Get(SyncService svc) => _hubs.TryGetValue(svc, out var hub) ? hub : null;
@@ -246,7 +249,20 @@ namespace NekoNetClient.WebAPI.SignalR
             _lastError.TryRemove(svc, out _);
             _svcSystemInfo.TryRemove(svc, out _);
             if (_svcPairManagers.TryGetValue(svc, out var pm))
-                pm.ClearPairs();
+            {
+                // Only remove users that are not present on other services
+                var key = GetServiceApiBase(svc);
+                pm.SelectiveClear(ud =>
+                {
+                    _rolling.Offline(ud.UID, key);
+                    var remove = !_rolling.IsOnlineElsewhere(ud.UID, key);
+                    if (remove)
+                    {
+                        try { pm.MarkPairOffline(ud); } catch { }
+                    }
+                    return remove;
+                });
+            }
         }
 
         public async Task DisconnectConfiguredAsync(int serverIndex)
@@ -266,7 +282,19 @@ namespace NekoNetClient.WebAPI.SignalR
             _cfgLastError.TryRemove(serverIndex, out _);
             _cfgSystemInfo.TryRemove(serverIndex, out _);
             if (_cfgPairManagers.TryGetValue(serverIndex, out var pm))
-                pm.ClearPairs();
+            {
+                var key = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
+                pm.SelectiveClear(ud =>
+                {
+                    _rolling.Offline(ud.UID, key);
+                    var remove = !_rolling.IsOnlineElsewhere(ud.UID, key);
+                    if (remove)
+                    {
+                        try { pm.MarkPairOffline(ud); } catch { }
+                    }
+                    return remove;
+                });
+            }
         }
 
         public Task ConnectAsync(params SyncService[] services)
@@ -419,7 +447,13 @@ namespace NekoNetClient.WebAPI.SignalR
             hub.On<UserDto>("Client_UserRemoveClientPair", dto => { try { pm.RemoveUserPair(dto); } catch { } });
             hub.On<OnlineUserIdentDto>("Client_UserSendOnline", dto =>
             {
-                try { pm.MarkPairOnline(dto, sendNotif: false); } catch { }
+                try
+                {
+                    pm.MarkPairOnline(dto, sendNotif: false);
+                    var key = GetServiceApiBase(svc);
+                    _rolling.Online(dto.User.UID, key);
+                }
+                catch { }
             });
             hub.On<UserDto>("Client_UserSendOffline", dto => { try { pm.MarkPairOffline(dto.User); } catch { } });
             hub.On<OnlineUserCharaDataDto>("Client_UserReceiveCharacterData", dto => { try { pm.ReceiveCharaData(dto); } catch { } });
@@ -463,7 +497,16 @@ namespace NekoNetClient.WebAPI.SignalR
             });
             hub.On<UserPairDto>("Client_UserAddClientPair", dto => { try { pm.AddUserPair(dto, addToLastAddedUser: false); } catch { } });
             hub.On<UserDto>("Client_UserRemoveClientPair", dto => { try { pm.RemoveUserPair(dto); } catch { } });
-            hub.On<OnlineUserIdentDto>("Client_UserSendOnline", dto => { try { pm.MarkPairOnline(dto, sendNotif: false); } catch { } });
+            hub.On<OnlineUserIdentDto>("Client_UserSendOnline", dto =>
+            {
+                try
+                {
+                    pm.MarkPairOnline(dto, sendNotif: false);
+                    var key = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
+                    _rolling.Online(dto.User.UID, key);
+                }
+                catch { }
+            });
             hub.On<UserDto>("Client_UserSendOffline", dto => { try { pm.MarkPairOffline(dto.User); } catch { } });
             hub.On<OnlineUserCharaDataDto>("Client_UserReceiveCharacterData", dto => { try { pm.ReceiveCharaData(dto); } catch { } });
             hub.On<UserPermissionsDto>("Client_UserUpdateOtherPairPermissions", dto => { try { pm.UpdatePairPermissions(dto); } catch { } });

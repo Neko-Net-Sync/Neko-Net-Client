@@ -29,6 +29,7 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
     private readonly ServerConfigurationManager _serverManager;
     private readonly TokenProvider _tokenProvider;
     private readonly MareConfigService _mareConfigService;
+    private readonly NekoNetClient.Services.Sync.RollingSyncRegistry _rolling;
     private CancellationTokenSource _connectionCancellationTokenSource;
     private ConnectionDto? _connectionDto;
     private bool _doNotNotifyOnNextInfo = false;
@@ -41,7 +42,8 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
 
     public ApiController(ILogger<ApiController> logger, HubFactory hubFactory, DalamudUtilService dalamudUtil,
         PairManager pairManager, ServerConfigurationManager serverManager, MareMediator mediator,
-        TokenProvider tokenProvider, MareConfigService mareConfigService) : base(logger, mediator)
+        TokenProvider tokenProvider, MareConfigService mareConfigService,
+        NekoNetClient.Services.Sync.RollingSyncRegistry rolling) : base(logger, mediator)
     {
         _hubFactory = hubFactory;
         _dalamudUtil = dalamudUtil;
@@ -49,6 +51,7 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
         _serverManager = serverManager;
         _tokenProvider = tokenProvider;
         _mareConfigService = mareConfigService;
+        _rolling = rolling;
         _connectionCancellationTokenSource = new CancellationTokenSource();
 
         Mediator.Subscribe<DalamudLoginMessage>(this, (_) => DalamudUtilOnLogIn());
@@ -325,6 +328,26 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
 
     private bool _naggedAboutLod = false;
 
+    private static string EnsureLeadingSlash(string p)
+        => string.IsNullOrWhiteSpace(p) ? "/mare" : (p[0] == '/' ? p : "/" + p);
+
+    private string GetResolvedUrl()
+    {
+        try
+        {
+            var s = _serverManager.CurrentServer;
+            if (s == null || string.IsNullOrWhiteSpace(s.ServerUri)) return MainServiceUri;
+            var baseUri = new Uri(s.ServerUri);
+            var path = s.ApiEndpoint ?? _serverManager.GetApiEndpointForDomain(s.ServerUri);
+            var builder = new UriBuilder(baseUri) { Path = EnsureLeadingSlash(path), Port = -1 };
+            return builder.Uri.ToString().TrimEnd('/');
+        }
+        catch
+        {
+            return MainServiceUri;
+        }
+    }
+
     public Task CyclePauseAsync(UserData userData)
     {
         CancellationTokenSource cts = new();
@@ -481,10 +504,12 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
             Logger.LogDebug("Attaching Census Data: {data}", dto);
         }
 
+        var key = GetResolvedUrl();
         foreach (var entry in await UserGetOnlinePairs(dto).ConfigureAwait(false))
         {
             Logger.LogDebug("Pair online: {pair}", entry);
             _pairManager.MarkPairOnline(entry, sendNotif: false);
+            try { _rolling.Online(entry.User.UID, key); } catch { }
         }
     }
 
@@ -588,6 +613,22 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
 
             _initialized = false;
             _healthCheckTokenSource?.Cancel();
+            // Selectively clear only users not online elsewhere across services
+            try
+            {
+                var key = GetResolvedUrl();
+                _pairManager.SelectiveClear(ud =>
+                {
+                    try { _rolling.Offline(ud.UID, key); } catch { }
+                    var remove = !_rolling.IsOnlineElsewhere(ud.UID, key);
+                    if (remove)
+                    {
+                        try { _pairManager.MarkPairOffline(ud); } catch { }
+                    }
+                    return remove;
+                });
+            }
+            catch { }
             Mediator.Publish(new DisconnectedMessage());
             _mareHub = null;
             _connectionDto = null;

@@ -152,6 +152,18 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    // Remove only users not present on other services, using provided predicate
+    public void SelectiveClear(Func<UserData, bool> shouldRemove)
+    {
+        foreach (var item in _allClientPairs.ToList())
+        {
+            if (!shouldRemove(item.Key)) continue;
+            item.Value.MarkOffline();
+            _allClientPairs.TryRemove(item.Key, out _);
+        }
+        RecreateLazy();
+    }
+
     public void MarkPairOnline(OnlineUserIdentDto dto, bool sendNotif = true)
     {
         if (!_allClientPairs.ContainsKey(dto.User)) throw new InvalidOperationException("No user found for " + dto);
