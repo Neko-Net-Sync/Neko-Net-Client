@@ -458,14 +458,12 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     private async Task<List<DownloadFileDto>> FilesGetSizes(List<string> hashes, CancellationToken ct)
     {
         Uri? baseCdn = null;
-        if (_serverIndex.HasValue)
+
+        // For service/configured flows, call getFileSizes on the service API base (normalized to http/https)
+        // so the server can select the appropriate CDN per file. This avoids pinning all files to a single CDN.
+        if (!string.IsNullOrEmpty(_serviceApiBase))
         {
-            baseCdn = _orchestrator.GetFilesCdnUriForServerIndex(_serverIndex.Value);
-        }
-        if (baseCdn == null && !string.IsNullOrEmpty(_serviceApiBase))
-        {
-            baseCdn = _orchestrator.GetFilesCdnUriForApiBase(_serviceApiBase);
-            if (baseCdn == null && Uri.TryCreate(_serviceApiBase, UriKind.Absolute, out var apiBase))
+            if (Uri.TryCreate(_serviceApiBase, UriKind.Absolute, out var apiBase))
             {
                 var builder = new UriBuilder(apiBase);
                 if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
@@ -475,13 +473,18 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 builder.Query = null;
                 builder.Fragment = null;
                 baseCdn = builder.Uri;
-                PublishDownloadEvent(EventSeverity.Informational, "Using service API base as CDN fallback", uri: baseCdn);
             }
+        }
+
+        // Otherwise, prefer CDN resolved by server index, finally fall back to the main orchestrator CDN
+        if (baseCdn == null && _serverIndex.HasValue)
+        {
+            baseCdn = _orchestrator.GetFilesCdnUriForServerIndex(_serverIndex.Value);
         }
         baseCdn ??= _orchestrator.FilesCdnUri;
         if (baseCdn == null)
         {
-            PublishDownloadEvent(EventSeverity.Error, "FileTransferManager is not initialized for this server (no CDN)");
+            PublishDownloadEvent(EventSeverity.Error, "FileTransferManager is not initialized for this server (no CDN/API base)");
             throw new InvalidOperationException("FileTransferManager is not initialized for this server");
         }
 

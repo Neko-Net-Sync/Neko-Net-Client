@@ -281,9 +281,17 @@ namespace NekoNetClient.WebAPI.SignalR
             try
             {
                 var conn = await GetConnectionInfoAsync(svc, CancellationToken.None).ConfigureAwait(false);
-                if (conn != null && conn.ServerInfo?.FileServerAddress != null)
+                if (conn != null)
                 {
-                    _svcCdn[svc] = conn.ServerInfo.FileServerAddress;
+                    if (conn.ServerInfo?.FileServerAddress != null)
+                    {
+                        _svcCdn[svc] = conn.ServerInfo.FileServerAddress;
+                        _log.LogDebug("[Service {svc}] CDN set to {cdn}", svc, conn.ServerInfo.FileServerAddress);
+                    }
+                    else
+                    {
+                        _log.LogDebug("[Service {svc}] No CDN provided in ConnectionDto; proceeding without explicit CDN", svc);
+                    }
                     Mediator.Publish(new ServiceConnectedMessage(svc, conn, GetServiceApiBase(svc)));
                 }
             }
@@ -303,7 +311,14 @@ namespace NekoNetClient.WebAPI.SignalR
                 if (conn != null)
                 {
                     if (conn.ServerInfo?.FileServerAddress != null)
+                    {
                         _cfgCdn[serverIndex] = conn.ServerInfo.FileServerAddress;
+                        _log.LogDebug("[Configured #{idx}] CDN set to {cdn}", serverIndex, conn.ServerInfo.FileServerAddress);
+                    }
+                    else
+                    {
+                        _log.LogDebug("[Configured #{idx}] No CDN provided in ConnectionDto; proceeding without explicit CDN", serverIndex);
+                    }
                     Mediator.Publish(new ConfiguredConnectedMessage(serverIndex, conn));
                 }
             }
@@ -389,6 +404,16 @@ namespace NekoNetClient.WebAPI.SignalR
         private void RegisterMareEventHandlers(SyncService svc, HubConnection hub)
         {
             var pm = GetPairManagerForService(svc);
+            // Files / Download queue readiness
+            hub.On<Guid>("Client_DownloadReady", guid =>
+            {
+                try
+                {
+                    _log.LogDebug("[Service {svc}] Received Client_DownloadReady: {guid}", svc, guid);
+                    Mediator.Publish(new DownloadReadyMessage(guid));
+                }
+                catch { }
+            });
             // Users
             hub.On<UserPairDto>("Client_UserAddClientPair", dto => { try { pm.AddUserPair(dto, addToLastAddedUser: false); } catch { } });
             hub.On<UserDto>("Client_UserRemoveClientPair", dto => { try { pm.RemoveUserPair(dto); } catch { } });
@@ -426,6 +451,16 @@ namespace NekoNetClient.WebAPI.SignalR
         private void RegisterMareEventHandlersConfigured(int serverIndex, HubConnection hub)
         {
             var pm = GetPairManagerForConfigured(serverIndex);
+            // Files / Download queue readiness
+            hub.On<Guid>("Client_DownloadReady", guid =>
+            {
+                try
+                {
+                    _log.LogDebug("[Configured #{idx}] Received Client_DownloadReady: {guid}", serverIndex, guid);
+                    Mediator.Publish(new DownloadReadyMessage(guid));
+                }
+                catch { }
+            });
             hub.On<UserPairDto>("Client_UserAddClientPair", dto => { try { pm.AddUserPair(dto, addToLastAddedUser: false); } catch { } });
             hub.On<UserDto>("Client_UserRemoveClientPair", dto => { try { pm.RemoveUserPair(dto); } catch { } });
             hub.On<OnlineUserIdentDto>("Client_UserSendOnline", dto => { try { pm.MarkPairOnline(dto, sendNotif: false); } catch { } });
