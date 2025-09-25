@@ -185,19 +185,23 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
 
         try
         {
-            await UploadFileStream(compressedFile, fileHash, _mareConfigService.Current.UseAlternativeFileUpload, postProgress, uploadToken).ConfigureAwait(false);
+            bool useMunge = _serverManager.CurrentServer?.UseMungeUpload ?? false;
+            await UploadFileStream(compressedFile, fileHash, useMunge, postProgress, uploadToken).ConfigureAwait(false);
             _verifiedUploadedHashes[fileHash] = DateTime.UtcNow;
         }
         catch (Exception ex)
         {
-            if (!_mareConfigService.Current.UseAlternativeFileUpload && ex is not OperationCanceledException)
+            bool useMunge = _serverManager.CurrentServer?.UseMungeUpload ?? false;
+            if (!useMunge && ex is not OperationCanceledException)
             {
-                Logger.LogWarning(ex, "[{hash}] Error during file upload, trying alternative file upload", fileHash);
+                Logger.LogWarning(ex, "[{hash}] Error during file upload, trying munged upload as fallback", fileHash);
                 await UploadFileStream(compressedFile, fileHash, munged: true, postProgress, uploadToken).ConfigureAwait(false);
+                _verifiedUploadedHashes[fileHash] = DateTime.UtcNow;
             }
             else
             {
-                Logger.LogWarning(ex, "[{hash}] File upload cancelled", fileHash);
+                Logger.LogWarning(ex, "[{hash}] File upload failed", fileHash);
+                throw;
             }
         }
     }

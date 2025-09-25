@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNetClient.FileCache;
+using NekoNet.API.Dto.Files;
 using NekoNetClient.Interop.Ipc;
 using NekoNetClient.PlayerData.Data;
 using NekoNetClient.PlayerData.Factories;
@@ -621,8 +622,23 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
     private void Initialize(string name)
     {
+        Logger.LogTrace("Initializing PairHandler for {alias}; name={name}, ident={ident}", Pair.UserData.AliasOrUID, name, Pair.Ident);
         PlayerName = name;
-        _charaHandler = _gameObjectHandlerFactory.Create(ObjectKind.Player, () => _dalamudUtil.GetPlayerCharacterFromCachedTableByIdent(Pair.Ident), isWatched: false).GetAwaiter().GetResult();
+        // Resolve by Ident (hashed CID) first; if not found (service-specific ident mismatch), fall back to exact name match.
+        _charaHandler = _gameObjectHandlerFactory.Create(ObjectKind.Player, () =>
+        {
+            var byIdent = _dalamudUtil.GetPlayerCharacterFromCachedTableByIdent(Pair.Ident);
+            if (byIdent != nint.Zero)
+            {
+                Logger.LogTrace("Resolved player address by ident {ident}: {addr}", Pair.Ident, byIdent);
+                return byIdent;
+            }
+            var byName = _dalamudUtil.GetPlayerCharacterFromCachedTableByName(name);
+            Logger.LogTrace("Ident resolution failed for {ident}; name fallback {name} -> {addr}", Pair.Ident, name, byName);
+            return byName;
+        }, isWatched: false).GetAwaiter().GetResult();
+
+        Logger.LogTrace("Finalize initialization for {alias}/{name}: resolved address {addr}", Pair.UserData.AliasOrUID, name, _charaHandler?.Address ?? nint.Zero);
 
         _serverConfigManager.AutoPopulateNoteForUid(Pair.UserData.UID, name);
 
@@ -737,6 +753,19 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         try
         {
             var replacementList = charaData.FileReplacements.SelectMany(k => k.Value.Where(v => string.IsNullOrEmpty(v.FileSwapPath))).ToList();
+
+            // Server-side verification: ask the server for file info for all hashes in this batch.
+            // If local cache exists but file size differs from RawSize reported by server, mark as missing to force re-download.
+            Dictionary<string, DownloadFileDto> serverInfo = new(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var allHashes = replacementList.Select(r => r.Hash).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                serverInfo = _downloadManager.GetServerFileInfoAsync(allHashes, token).ConfigureAwait(false).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "[BASE-{appBase}] Could not fetch server file info for verification, proceeding with local-only checks", applicationBase);
+            }
             Parallel.ForEach(replacementList, new ParallelOptions()
             {
                 CancellationToken = token,
@@ -748,6 +777,28 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                 var fileCache = _fileDbManager.GetFileCacheByHash(item.Hash);
                 if (fileCache != null)
                 {
+                    // verify against server RawSize if available
+                    if (serverInfo.TryGetValue(item.Hash, out var info)
+                        && info.RawSize > 0)
+                    {
+                        try
+                        {
+                            var fi = new FileInfo(fileCache.ResolvedFilepath);
+                            if (!fi.Exists || fi.Length != info.RawSize)
+                            {
+                                Logger.LogInformation("[BASE-{appBase}] Local cache size mismatch for {hash}: local={local} bytes server={server} bytes; redownloading", applicationBase, item.Hash, fi.Exists ? fi.Length : -1, info.RawSize);
+                                missingFiles.Add(item);
+                                return; // skip mapping to outputDict so it will be downloaded
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogDebug(ex, "[BASE-{appBase}] Could not compare file size for {hash}, scheduling re-download", applicationBase, item.Hash);
+                            missingFiles.Add(item);
+                            return;
+                        }
+                    }
+
                     if (string.IsNullOrEmpty(new FileInfo(fileCache.ResolvedFilepath).Extension))
                     {
                         hasMigrationChanges = true;

@@ -281,6 +281,46 @@ public class DalamudUtilService : IHostedService, IMediatorSubscriber
         return IntPtr.Zero;
     }
 
+    // Fallback: resolve a player by in-game name when ident/hash is unavailable or incorrect.
+    // Tries exact (ordinal), case-insensitive, and whitespace-normalized matches.
+    public IntPtr GetPlayerCharacterFromCachedTableByName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return IntPtr.Zero;
+        var target = name.Trim();
+
+        // Exact match first (fast path)
+        foreach (var kv in _playerCharas)
+        {
+            if (string.Equals(kv.Value.Name, target, StringComparison.Ordinal))
+                return kv.Value.Address;
+        }
+
+        // Case-insensitive fallback
+        foreach (var kv in _playerCharas)
+        {
+            if (string.Equals(kv.Value.Name, target, StringComparison.OrdinalIgnoreCase))
+                return kv.Value.Address;
+        }
+
+        // Collapse multiple spaces and retry (handles accidental double spaces)
+        var normalized = System.Text.RegularExpressions.Regex.Replace(target, "\\s+", " ");
+        if (!string.Equals(normalized, target, StringComparison.Ordinal))
+        {
+            foreach (var kv in _playerCharas)
+            {
+                if (string.Equals(kv.Value.Name, normalized, StringComparison.Ordinal))
+                    return kv.Value.Address;
+            }
+            foreach (var kv in _playerCharas)
+            {
+                if (string.Equals(kv.Value.Name, normalized, StringComparison.OrdinalIgnoreCase))
+                    return kv.Value.Address;
+            }
+        }
+
+        return IntPtr.Zero;
+    }
+
     public string GetPlayerName()
     {
         EnsureIsOnFramework();

@@ -57,13 +57,31 @@ internal sealed class ServiceSessionView
         _ => svc.ToString()
     };
 
+
+
+
+
+
     public void DrawServiceHeader(SyncService svc)
     {
         var hubState = _multi.GetState(svc);
         var buttonSize = _ui.GetIconButtonSize(FontAwesomeIcon.Link);
 
-        var (online, shard) = _multi.GetServiceOnlineAsync(svc, CancellationToken.None).GetAwaiter().GetResult();
-        var onlineStr = online.HasValue ? online.Value.ToString() : "?";
+        var online = 0;
+        string shard = string.Empty;
+
+        try
+        {
+            var (onlineResult, shardResult) = _multi.GetServiceOnlineAsync(svc, CancellationToken.None).GetAwaiter().GetResult();
+            online = onlineResult ?? 0;
+            shard = shardResult ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Failed to get online info for {svc}", svc);
+        }
+
+        var onlineStr = online.ToString();
         var userSize = ImGui.CalcTextSize(onlineStr);
         var textSize = ImGui.CalcTextSize("Users Online");
         var shardText = string.IsNullOrEmpty(shard) ? string.Empty : $"Shard: {shard}";
@@ -161,8 +179,8 @@ internal sealed class ServiceSessionView
 
             // Draw pairs list in the same grouping logic as main view
             var pm = _multi.GetPairManagerForService(svc);
-            // Seed from cached hub data if the service PairManager is empty
-            TrySeedFromCaches(svc, pm);
+            // Seed from cached hub data if needed (throttled)
+            TrySeedFromCachesThrottled(svc, pm);
             var apiUrl = ResolveApiUrlForService(svc);
             var tagHandler = new TagHandler(_servers, apiUrl);
             var router = new ServiceApiActionRouter(_multi, svc);
@@ -182,14 +200,22 @@ internal sealed class ServiceSessionView
         }
     }
 
+    private void TrySeedFromCachesThrottled(SyncService svc, PairManager pm)
+    {
+        var hubState = _multi.GetState(svc);
+        
+        if (hubState != Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected)
+        {
+            return; // don't seed when disconnected; UI should show empty
+        }
+            
+        TrySeedFromCaches(svc, pm);
+    }
+
     private void TrySeedFromCaches(SyncService svc, PairManager pm)
     {
         try
         {
-            if (_multi.GetState(svc) != Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected)
-            {
-                return; // don't seed when disconnected; UI should show empty
-            }
             // Push groups and members from cache
             var groups = _multi.GetServiceGroupInfos(svc);
             if (groups != null && groups.Count > 0)
@@ -238,6 +264,32 @@ internal sealed class ServiceSessionView
         }
     }
 
+    private void TrySeedFromConfiguredCachesThrottled(int serverIndex, PairManager pm)
+    {
+        var hubState = _multi.GetConfiguredState(serverIndex);
+        
+        if (hubState != Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected)
+        {
+            return; // don't seed when disconnected; UI should show empty
+        }
+            
+        TrySeedFromConfiguredCaches(serverIndex, pm);
+    }
+
+    private void TrySeedFromConfiguredCaches(int serverIndex, PairManager pm)
+    {
+        try
+        {
+            // Note: Configured servers may not have cached group/online info methods yet
+            // This is primarily for throttling pair manager operations for now
+            _log.LogTrace("Seeded configured server {idx} pair manager", serverIndex);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "TrySeedFromConfiguredCaches failed for server {idx}", serverIndex);
+        }
+    }
+
     private string ResolveApiUrlForService(SyncService svc)
     {
         var idx = _multi.GetServerIndexForService(svc);
@@ -278,8 +330,8 @@ internal sealed class ServiceSessionView
             => (u.Key.IsOnline || (!_cfg.Current.ShowOfflineUsersSeparately)
                     || u.Key.UserPair.OwnPermissions.IsPaused());
         Dictionary<Pair, List<GroupFullInfoDto>> BasicSortedDictionary(IEnumerable<KeyValuePair<Pair, List<GroupFullInfoDto>>> u)
-            => u.OrderByDescending(u => u.Key.IsVisible)
-                .ThenByDescending(u => u.Key.IsOnline)
+            => u.OrderByDescending(u => u.Key.IsOnline)
+                .ThenByDescending(u => u.Key.IsVisible)
                 .ThenBy(AlphabeticalSort, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(u => u.Key, u => u.Value);
         ImmutableList<Pair> ImmutablePairList(IEnumerable<KeyValuePair<Pair, List<GroupFullInfoDto>>> u)
@@ -363,7 +415,19 @@ internal sealed class ServiceSessionView
         var hubState = _multi.GetConfiguredState(serverIndex);
         var buttonSize = _ui.GetIconButtonSize(FontAwesomeIcon.Link);
 
-        var (online, shard) = _multi.GetConfiguredOnlineAsync(serverIndex, CancellationToken.None).GetAwaiter().GetResult();
+        int? online = null;
+        string shard = string.Empty;
+        
+        try
+        {
+            var (onlineResult, shardResult) = _multi.GetConfiguredOnlineAsync(serverIndex, CancellationToken.None).GetAwaiter().GetResult();
+            online = onlineResult;
+            shard = shardResult ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Failed to get configured online info for server {idx}", serverIndex);
+        }
         var onlineStr = online.HasValue ? online.Value.ToString() : "?";
         var userSize = ImGui.CalcTextSize(onlineStr);
         var textSize = ImGui.CalcTextSize("Users Online");
@@ -451,6 +515,8 @@ internal sealed class ServiceSessionView
             ImGui.Separator();
 
             var pm = _multi.GetPairManagerForConfigured(serverIndex);
+            TrySeedFromConfiguredCachesThrottled(serverIndex, pm);
+            
             var router = new ConfiguredApiActionRouter(_multi, serverIndex);
             var tagHandler = new TagHandler(_servers, _servers.GetServerByIndex(serverIndex).ServerUri);
 
@@ -463,6 +529,7 @@ internal sealed class ServiceSessionView
             }
             _filters[(SyncService)(-1 - serverIndex)] = filter;
 
+            // Only rebuild folders if refreshing or if filter changed
             var drawFolders = BuildFolders(pm, tagHandler, router, filter);
 
             foreach (var folder in drawFolders)

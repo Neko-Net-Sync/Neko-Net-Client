@@ -282,6 +282,19 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         CurrentDownloads = downloadFileInfoFromService.Distinct().Select(d => new DownloadFileTransfer(d))
             .Where(d => d.CanBeTransferred).ToList();
 
+        // Debug log to show URL types being used
+        foreach (var dto in downloadFileInfoFromService.Where(d => d.FileExists && !d.IsForbidden))
+        {
+            if (!string.IsNullOrEmpty(dto.DirectDownloadUrl))
+            {
+                Logger.LogDebug("Using DirectDownloadUrl for {hash}: {url}", dto.Hash, dto.DirectDownloadUrl);
+            }
+            else
+            {
+                Logger.LogDebug("Using standard Url for {hash}: {url}", dto.Hash, dto.Url);
+            }
+        }
+
         // Register all hosts involved so token routing can pick the correct server index even in service-only flows
         try
         {
@@ -485,6 +498,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     private async Task<List<DownloadFileDto>> FilesGetSizes(List<string> hashes, CancellationToken ct)
     {
         Uri? baseCdn = null;
+        string source = "unknown";
 
         // For service/configured flows, call getFileSizes on the service API base (normalized to http/https)
         // so the server can select the appropriate CDN per file. This avoids pinning all files to a single CDN.
@@ -500,6 +514,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 builder.Query = null;
                 builder.Fragment = null;
                 baseCdn = builder.Uri;
+                source = "service API base";
             }
         }
 
@@ -507,8 +522,10 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         if (baseCdn == null && _serverIndex.HasValue)
         {
             baseCdn = _orchestrator.GetFilesCdnUriForServerIndex(_serverIndex.Value);
+            if (baseCdn != null) source = "server-index CDN";
         }
         baseCdn ??= _orchestrator.FilesCdnUri;
+        if (baseCdn != null && source == "unknown") source = "default CDN";
         if (baseCdn == null)
         {
             PublishDownloadEvent(EventSeverity.Error, "FileTransferManager is not initialized for this server (no CDN/API base)");
@@ -516,6 +533,11 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         }
 
         var requestUri = MareFiles.ServerFilesGetSizesFullPath(baseCdn);
+        try
+        {
+            PublishDownloadEvent(EventSeverity.Informational, $"Requesting file sizes for {hashes?.Count ?? 0} files via {source}", uri: requestUri);
+        }
+        catch { }
         HttpResponseMessage response;
         try
         {
@@ -530,6 +552,37 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
+            // Check if this is a 404 - server might not support getFileSizes endpoint
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                PublishDownloadEvent(EventSeverity.Warning, $"Server does not support /files/getFileSizes endpoint, falling back to direct distribution downloads", uri: requestUri);
+                Logger.LogWarning("Server {server} does not support getFileSizes endpoint, using fallback mechanism", source);
+                
+                // Create fallback DownloadFileDto entries using distribution endpoint
+                var fallbackResults = new List<DownloadFileDto>();
+                foreach (var hash in hashes ?? [])
+                {
+                    // Try multiple URL patterns for different server implementations
+                    var fallbackUrls = GenerateFallbackUrls(baseCdn, hash);
+                    
+                    // Use the first URL as primary, but log all possibilities for debugging
+                    var primaryUrl = fallbackUrls.First();
+                    Logger.LogDebug("Generated fallback URLs for hash {hash}: {urls}", hash, string.Join(", ", fallbackUrls));
+                    PublishDownloadEvent(EventSeverity.Informational, $"Primary fallback URL for {hash}: {primaryUrl}", uri: new Uri(primaryUrl));
+                    
+                    fallbackResults.Add(new DownloadFileDto
+                    {
+                        Hash = hash,
+                        Url = primaryUrl,
+                        Size = 0, // Set to 0 instead of -1 to avoid potential issues
+                        FileExists = true,
+                        IsForbidden = false,
+                        RawSize = 0
+                    });
+                }
+                return fallbackResults;
+            }
+            
             PublishDownloadEvent(EventSeverity.Error, $"File size request failed with {response.StatusCode}: {Truncate(body, 256)}", uri: requestUri);
             Logger.LogWarning("File size request failed {status}: {body}", response.StatusCode, Truncate(body, 512));
             response.EnsureSuccessStatusCode();
@@ -550,6 +603,16 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             PublishDownloadEvent(EventSeverity.Error, $"Failed to parse file size response: {Truncate(body, 256)}", uri: requestUri, ex: ex);
             throw;
         }
+    }
+
+    // Expose server file info lookup so callers can verify local cache before deciding what to download.
+    public async Task<Dictionary<string, DownloadFileDto>> GetServerFileInfoAsync(IEnumerable<string> hashes, CancellationToken ct)
+    {
+        var list = hashes?.Distinct(StringComparer.OrdinalIgnoreCase).ToList() ?? [];
+        if (list.Count == 0) return new Dictionary<string, DownloadFileDto>(StringComparer.OrdinalIgnoreCase);
+
+        var infos = await FilesGetSizes(list, ct).ConfigureAwait(false);
+        return infos.ToDictionary(d => d.Hash, d => d, StringComparer.OrdinalIgnoreCase);
     }
 
     private void PersistFileToStorage(string fileHash, string filePath)
@@ -671,5 +734,22 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             }
             _orchestrator.ClearDownloadRequest(requestId);
         }
+    }
+
+    private static List<string> GenerateFallbackUrls(Uri baseUri, string hash)
+    {
+        var urls = new List<string>();
+        
+        // Standard Mare API pattern
+        urls.Add(MareFiles.DistributionGetFullPath(baseUri, hash).ToString());
+        
+        // Alternative patterns that different servers might use
+        urls.Add(new Uri(baseUri, $"/mare/dist/get?file={hash}").ToString()); // With /mare prefix
+        urls.Add(new Uri(baseUri, $"/files/{hash}").ToString()); // Direct file path
+        urls.Add(new Uri(baseUri, $"/download/{hash}").ToString()); // Download path
+        urls.Add(new Uri(baseUri, $"/dist/get?hash={hash}").ToString()); // Different parameter name
+        urls.Add(new Uri(baseUri, $"/api/files/{hash}").ToString()); // API prefix
+        
+        return urls;
     }
 }

@@ -84,10 +84,11 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
                     }
                     // Also map the base API host to the matching configured server index for token routing
                     var idx = FindServerIndexByApiBase(baseKey);
-                    if (idx.HasValue)
+                    if (idx.HasValue && Uri.TryCreate(baseKey, UriKind.Absolute, out var baseUri2))
                     {
-                        var baseHostKey = fallback.IsDefaultPort ? fallback.Host : $"{fallback.Host}:{fallback.Port}";
+                        var baseHostKey = baseUri2.IsDefaultPort ? baseUri2.Host : $"{baseUri2.Host}:{baseUri2.Port}";
                         _serverIdxByHost[baseHostKey] = idx.Value;
+                        Logger.LogDebug("Mapped API base host {host} to server index {idx} (service connected, no CDN)", baseHostKey, idx.Value);
                     }
                     return;
                 }
@@ -98,6 +99,13 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
                 {
                     var hostKey = cdn.IsDefaultPort ? cdn.Host : $"{cdn.Host}:{cdn.Port}";
                     _serverIdxByHost[hostKey] = serverIdx.Value;
+                    // Also map the API base host (e.g., connect.neko-net.cc) to the same server index
+                    if (Uri.TryCreate(baseKey, UriKind.Absolute, out var baseUri))
+                    {
+                        var baseHostKey = baseUri.IsDefaultPort ? baseUri.Host : $"{baseUri.Host}:{baseUri.Port}";
+                        _serverIdxByHost[baseHostKey] = serverIdx.Value;
+                        Logger.LogDebug("Mapped CDN host {cdnHost} and API base host {apiHost} to server index {idx}", hostKey, baseHostKey, serverIdx.Value);
+                    }
                 }
             }
             catch { }
@@ -270,6 +278,7 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
                     : $"{requestMessage.RequestUri.Host}:{requestMessage.RequestUri.Port}";
                 if (_serverIdxByHost.TryGetValue(key, out var idx))
                 {
+                    Logger.LogDebug("Routing auth via server index {idx} for host {host}", idx, key);
                     token = await _tokenProvider.GetOrUpdateTokenForServer(idx, ct ?? CancellationToken.None).ConfigureAwait(false);
                 }
             }

@@ -15,4 +15,5 @@ public class ServerStorage
     public HttpTransportType HttpTransportType { get; set; } = HttpTransportType.WebSockets;
     public bool ForceWebSockets { get; set; } = false;
     public string? ApiEndpoint { get; set; }
+    public bool UseMungeUpload { get; set; } = false;
 }

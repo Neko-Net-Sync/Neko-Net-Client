@@ -2078,12 +2078,13 @@ public class SettingsUi : WindowMediatorSubscriberBase
         ImGuiHelpers.ScaledDummy(new Vector2(2,2));
 
         var servers = _serverConfigurationManager.GetAllServers();
-        if (ImGui.BeginTable("srv_tbl", 4, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.RowBg))
+        if (ImGui.BeginTable("srv_tbl", 5, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.RowBg))
         {
-            ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 0.25f);
-            ImGui.TableSetupColumn("URL", ImGuiTableColumnFlags.WidthStretch, 0.45f);
+            ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 0.2f);
+            ImGui.TableSetupColumn("URL", ImGuiTableColumnFlags.WidthStretch, 0.35f);
             ImGui.TableSetupColumn("Endpoint", ImGuiTableColumnFlags.WidthStretch, 0.15f);
-            ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthStretch, 0.15f);
+            ImGui.TableSetupColumn("No Munge", ImGuiTableColumnFlags.WidthStretch, 0.1f);
+            ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthStretch, 0.2f);
             ImGui.TableHeadersRow();
 
             for (int i = 0; i < servers.Count; i++)
@@ -2122,6 +2123,18 @@ public class SettingsUi : WindowMediatorSubscriberBase
                 else
                 {
                     ImGui.TextUnformatted(s.ApiEndpoint ?? _serverConfigurationManager.GetApiEndpointForDomain(s.ServerUri));
+                }
+                ImGui.TableNextColumn();
+                // No Munge checkbox column
+                bool noMunge = s.UseMungeUpload;
+                if (ImGui.Checkbox($"##munge_{i}", ref noMunge))
+                {
+                    s.UseMungeUpload = noMunge;
+                    _serverConfigurationManager.Save();
+                }
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.SetTooltip("Use alternative upload method (munged). Typically not necessary to enable. Use if you have upload issues with this server.");
                 }
                 ImGui.TableNextColumn();
                 using (ImRaii.PushId($"row-{i}"))
