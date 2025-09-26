@@ -777,8 +777,12 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                 var fileCache = _fileDbManager.GetFileCacheByHash(item.Hash);
                 if (fileCache != null)
                 {
-                    // verify against server RawSize if available
-                    if (serverInfo.TryGetValue(item.Hash, out var info)
+                    // Check if this is a PlayerSync server with direct download enabled
+                    bool isPlayerSyncDirectDownload = _downloadManager.ServerIndex.HasValue && 
+                        _serverConfigManager.GetServerByIndex(_downloadManager.ServerIndex.Value)?.UseDirectDownload == true;
+                        
+                    // verify against server RawSize if available, but skip verification for PlayerSync direct downloads
+                    if (!isPlayerSyncDirectDownload && serverInfo.TryGetValue(item.Hash, out var info)
                         && info.RawSize > 0)
                     {
                         try
@@ -794,6 +798,27 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                         catch (Exception ex)
                         {
                             Logger.LogDebug(ex, "[BASE-{appBase}] Could not compare file size for {hash}, scheduling re-download", applicationBase, item.Hash);
+                            missingFiles.Add(item);
+                            return;
+                        }
+                    }
+                    else if (isPlayerSyncDirectDownload)
+                    {
+                        // For PlayerSync direct downloads, just verify the file exists locally
+                        try
+                        {
+                            var fi = new FileInfo(fileCache.ResolvedFilepath);
+                            if (!fi.Exists)
+                            {
+                                Logger.LogInformation("[BASE-{appBase}] PlayerSync file {hash} missing locally, scheduling re-download", applicationBase, item.Hash);
+                                missingFiles.Add(item);
+                                return;
+                            }
+                            Logger.LogTrace("[BASE-{appBase}] PlayerSync file {hash} exists locally ({bytes} bytes), using cached version", applicationBase, item.Hash, fi.Length);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogDebug(ex, "[BASE-{appBase}] Could not verify PlayerSync file {hash}, scheduling re-download", applicationBase, item.Hash);
                             missingFiles.Add(item);
                             return;
                         }

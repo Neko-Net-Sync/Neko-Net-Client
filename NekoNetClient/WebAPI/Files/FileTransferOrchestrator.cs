@@ -261,7 +261,16 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         var builder = new UriBuilder(uri);
         if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
         else if (string.Equals(builder.Scheme, "ws", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "http";
-        builder.Port = -1;
+        // Keep only scheme + authority for key matching
+        builder.Path = string.Empty;
+        builder.Query = null;
+        builder.Fragment = null;
+        // If port is default for scheme, let it be default
+        if ((string.Equals(builder.Scheme, "https", StringComparison.OrdinalIgnoreCase) && builder.Port == 443)
+            || (string.Equals(builder.Scheme, "http", StringComparison.OrdinalIgnoreCase) && builder.Port == 80))
+        {
+            builder.Port = -1;
+        }
         return builder.Uri.ToString().TrimEnd('/');
     }
 
@@ -276,10 +285,15 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
                 var key = requestMessage.RequestUri.IsDefaultPort
                     ? requestMessage.RequestUri.Host
                     : $"{requestMessage.RequestUri.Host}:{requestMessage.RequestUri.Port}";
+                Logger.LogTrace("Auth routing lookup for host key: {key}", key);
                 if (_serverIdxByHost.TryGetValue(key, out var idx))
                 {
                     Logger.LogDebug("Routing auth via server index {idx} for host {host}", idx, key);
                     token = await _tokenProvider.GetOrUpdateTokenForServer(idx, ct ?? CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    Logger.LogTrace("No mapped server index for host key {key}; using default token", key);
                 }
             }
         }

@@ -13,7 +13,7 @@ At this point in time:
 <img width="368" height="76" alt="image" src="https://github.com/user-attachments/assets/9bcaa05f-4d1e-4dc1-bdeb-b112dfdaf99f" />
 
 - Add more servers via the setup > Additional server. For questions on which endpoint to use, try /mare first, if it doesn't connect reach out to me on discord. 
-- Additional servers will show up in the Neko-Net Services:
+- Additional servers will show up in the Cross Sync window:
 <img width="373" height="87" alt="image" src="https://github.com/user-attachments/assets/b96f4e28-f7e7-41c7-a11b-8f100964b3bd" />
 
 

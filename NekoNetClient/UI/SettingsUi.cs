@@ -252,7 +252,7 @@ public class SettingsUi : WindowMediatorSubscriberBase
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted("0 = No limit/infinite");
 
-        if (ImGui.SliderInt("Maximum Parallel Downloads", ref maxParallelDownloads, 1, 10))
+        if (ImGui.SliderInt("Maximum Parallel Downloads", ref maxParallelDownloads, 1, 30))
         {
             _configService.Current.ParallelDownloads = maxParallelDownloads;
             _configService.Save();
@@ -1747,6 +1747,15 @@ public class SettingsUi : WindowMediatorSubscriberBase
                 }
 
                 ImGuiHelpers.ScaledDummy(5);
+
+                bool useDirectDownload = selectedServer.UseDirectDownload;
+                if (ImGui.Checkbox("Use Direct Download (for PlayerSync servers)", ref useDirectDownload))
+                {
+                    selectedServer.UseDirectDownload = useDirectDownload;
+                    _serverConfigurationManager.Save();
+                }
+                _uiShared.DrawHelpText("Enable direct download for PlayerSync servers that provide DirectDownloadUrl. " +
+                    "This bypasses the traditional Mare CDN system and downloads files directly from the external CDN.");
 
                 if (ImGui.Checkbox("Use Discord OAuth2 Authentication", ref useOauth))
                 {

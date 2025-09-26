@@ -31,7 +31,7 @@ public sealed class ServicesUi : WindowMediatorSubscriberBase
         DrawEntityFactory drawFactory,
         MareConfigService cfg,
         PerformanceCollectorService perf)
-        : base(logger, mediator, "###Neko-NetServicesUI", perf)
+    : base(logger, mediator, "###CrossSyncUI", perf)
     {
         _multi = multi;
         _servers = servers;
@@ -46,7 +46,7 @@ public sealed class ServicesUi : WindowMediatorSubscriberBase
             drawFactory: _drawFactory
         );
 
-        WindowName = "Neko-Net Services###Neko-NetServicesUI";
+    WindowName = "Cross Sync###CrossSyncUI";
         AllowPinning = false;
         AllowClickthrough = false;
 

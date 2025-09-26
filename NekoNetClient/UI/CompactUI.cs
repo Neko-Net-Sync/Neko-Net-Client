@@ -136,21 +136,6 @@ public class CompactUi : WindowMediatorSubscriberBase
                     ImGui.Text("Open Services View (per-service sessions)");
                     ImGui.EndTooltip();
                 }
-            },
-            new TitleBarButton()
-            {
-                Icon = FontAwesomeIcon.Table,
-                Click = (msg) =>
-                {
-                    Mediator.Publish(new UiToggleMessage(typeof(CombinedSyncViewWindow)));
-                },
-                IconOffset = new(2,1),
-                ShowTooltip = () =>
-                {
-                    ImGui.BeginTooltip();
-                    ImGui.Text("Open Combined Sync View (all synced users)");
-                    ImGui.EndTooltip();
-                }
             }
         };
 

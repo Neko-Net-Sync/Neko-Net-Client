@@ -16,4 +16,5 @@ public class ServerStorage
     public bool ForceWebSockets { get; set; } = false;
     public string? ApiEndpoint { get; set; }
     public bool UseMungeUpload { get; set; } = false;
+    public bool UseDirectDownload { get; set; } = false;
 }

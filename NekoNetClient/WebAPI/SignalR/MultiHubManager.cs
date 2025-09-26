@@ -212,7 +212,6 @@ namespace NekoNetClient.WebAPI.SignalR
                 var builder = new UriBuilder(uri);
                 if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
                 else if (string.Equals(builder.Scheme, "ws", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "http";
-                builder.Port = -1;
                 return builder.Uri.ToString().TrimEnd('/');
             }
             catch
@@ -225,9 +224,27 @@ namespace NekoNetClient.WebAPI.SignalR
             return _cfgPairManagers.GetOrAdd(serverIndex, idx =>
             {
                 var logger = _loggerFactory.CreateLogger<PairManager>();
-                var apiUrl = _servers.GetServerByIndex(idx).ServerUri;
-                return new PairManager(logger, _pairFactory, _cfg, Mediator, _contextMenu, apiUrlOverride: apiUrl, serviceScoped: true);
+                var rawApiUrl = _servers.GetServerByIndex(idx).ServerUri;
+                var normalizedApiUrl = NormalizeServerUrl(rawApiUrl);
+                return new PairManager(logger, _pairFactory, _cfg, Mediator, _contextMenu, apiUrlOverride: normalizedApiUrl, serviceScoped: true);
             });
+        }
+
+        private string NormalizeServerUrl(string url)
+        {
+            try
+            {
+                var uri = new Uri(url);
+                var builder = new UriBuilder(uri);
+                if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
+                else if (string.Equals(builder.Scheme, "ws", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "http";
+                builder.Port = -1;
+                return builder.Uri.ToString().TrimEnd('/');
+            }
+            catch
+            {
+                return url.TrimEnd('/');
+            }
         }
 
         public Task DisconnectAsync(params SyncService[] services)

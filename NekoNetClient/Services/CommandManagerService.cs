@@ -46,7 +46,7 @@ public sealed class CommandManagerService : IDisposable
                 "\t /nsync gpose - Opens the Neko-Net Character Data Hub window" + Environment.NewLine +
                 "\t /nsync analyze - Opens the Neko-Net Character Data Analysis window" + Environment.NewLine +
                 "\t /nsync settings - Opens the Neko-Net Settings window" + Environment.NewLine +
-                "\t /nsync services - Opens the Neko-Net Services window (per-service sessions)"
+        "\t /nsync services - Opens the Cross Sync window (per-service sessions)"
         });
     }
 

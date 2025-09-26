@@ -8,8 +8,30 @@ public class DownloadFileTransfer : FileTransfer
     {
     }
 
-    public override bool CanBeTransferred => Dto.FileExists && !Dto.IsForbidden && Dto.Size > 0;
-    public Uri DownloadUri => new(!string.IsNullOrEmpty(Dto.DirectDownloadUrl) ? Dto.DirectDownloadUrl : Dto.Url);
+    // Allow transfers if the file exists and is not forbidden. For standard CDN flow we require Size > 0.
+    // For distribution-fallback entries (no size known), allow transfer even when Size == 0.
+    public override bool CanBeTransferred => Dto.FileExists && !Dto.IsForbidden && (Dto.Size > 0 || IsDistributionDirect);
+    // Always use the standard CDN/API Url for orchestration (enqueue/check/cache).
+    // DirectDownloadUrl is reserved for the PlayerSync direct-download path only.
+    public Uri DownloadUri => new(Dto.Url);
+    public Uri? DirectDownloadUri => string.IsNullOrEmpty(Dto.DirectDownloadUrl) ? null : new Uri(Dto.DirectDownloadUrl);
+    public bool IsDistributionDirect
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(Dto.Url)) return false;
+            try
+            {
+                var uri = new Uri(Dto.Url, UriKind.Absolute);
+                var path = (uri.AbsolutePath ?? string.Empty).ToLowerInvariant();
+                // Typical patterns in our generated fallback URLs
+                if (path.Contains("/dist/") || path.Contains("/files/") || path.Contains("/download/") || path.Contains("/api/files/"))
+                    return true;
+            }
+            catch { }
+            return false;
+        }
+    }
     public override long Total
     {
         set
@@ -20,5 +42,5 @@ public class DownloadFileTransfer : FileTransfer
     }
 
     public long TotalRaw => Dto.RawSize;
-    private DownloadFileDto Dto => (DownloadFileDto)TransferDto;
+    public new DownloadFileDto Dto => (DownloadFileDto)TransferDto;
 }
