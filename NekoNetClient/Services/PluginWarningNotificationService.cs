@@ -1,4 +1,10 @@
-﻿using NekoNet.API.Data;
+﻿/*
+    Neko-Net Client — Services.PluginWarningNotificationService
+    ----------------------------------------------------------
+    Purpose
+    - Detects missing plugin requirements for incoming character data and surfaces actionable notifications.
+*/
+using NekoNet.API.Data;
 using NekoNet.API.Data.Comparer;
 using NekoNetClient.Interop.Ipc;
 using NekoNetClient.MareConfiguration;

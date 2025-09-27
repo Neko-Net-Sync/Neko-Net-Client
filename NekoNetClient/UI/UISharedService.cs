@@ -1,4 +1,12 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿/*
+     Neko-Net Client — UI.UiSharedService
+     ------------------------------------
+     Purpose
+     - Centralized UI utility/service used across windows and overlays: drawing helpers (outlined fonts, colors),
+         tooltips, byte formatting, OAuth helpers, texture/font management, and coordination with services
+         (IPC availability flags, server states, cache monitor, etc.).
+*/
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.GameFonts;
@@ -33,6 +41,7 @@ namespace NekoNetClient.UI;
 
 public partial class UiSharedService : DisposableMediatorSubscriberBase
 {
+    /// <summary>Separator token used within multi-part tooltips.</summary>
     public const string TooltipSeparator = "--SEP--";
     public static readonly ImGuiWindowFlags PopupWindowFlags = ImGuiWindowFlags.NoResize |
                                                ImGuiWindowFlags.NoScrollbar |
@@ -121,6 +130,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
         IconFont = _pluginInterface.UiBuilder.IconFontFixedWidthHandle;
     }
 
+    /// <summary>Convenience constant for formatting longer text.</summary>
     public static string DoubleNewLine => Environment.NewLine + Environment.NewLine;
     public ApiController ApiController => _apiController;
     public ISyncFacade SyncFacade => _syncFacade;
@@ -140,6 +150,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
     public Dictionary<ushort, string> WorldData => _dalamudUtil.WorldData.Value;
     public uint WorldId => _dalamudUtil.GetHomeWorldId();
 
+    /// <summary>Attaches a tooltip to the currently hovered item.</summary>
     public static void AttachToolTip(string text)
     {
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
@@ -164,6 +175,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>Formats bytes using an IEC suffix for UI display.</summary>
     public static string ByteToString(long bytes, bool addSuffix = true)
     {
         string[] suffix = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -177,15 +189,18 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
         return addSuffix ? $"{dblSByte:0.00} {suffix[i]}" : $"{dblSByte:0.00}";
     }
 
+    /// <summary>Centers the next window by width/height on the main viewport.</summary>
     public static void CenterNextWindow(float width, float height, ImGuiCond cond = ImGuiCond.None)
     {
         var center = ImGui.GetMainViewport().GetCenter();
         ImGui.SetNextWindowPos(new Vector2(center.X - width / 2, center.Y - height / 2), cond);
     }
 
+    /// <summary>Converts RGBA bytes into a packed ImGui color.</summary>
     public static uint Color(byte r, byte g, byte b, byte a)
     { uint ret = a; ret <<= 8; ret += b; ret <<= 8; ret += g; ret <<= 8; ret += r; return ret; }
 
+    /// <summary>Converts a Vector4 [0..1] color into a packed ImGui color.</summary>
     public static uint Color(Vector4 color)
     {
         uint ret = (byte)(color.W * 255);

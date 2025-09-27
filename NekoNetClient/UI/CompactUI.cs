@@ -1,4 +1,10 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿//
+// Neko-Net Client — CompactUi
+// Purpose: Main/compact window aggregating pairs, groups/tags, transfers, and service/session
+//          controls. Hosts server picker, draw folders via DrawEntityFactory, and in-flight
+//          download status per actor.
+//
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
@@ -31,6 +37,11 @@ using System.Reflection;
 
 namespace NekoNetClient.UI;
 
+/// <summary>
+/// Compact UI window presenting core Neko-Net controls and information such as visible pairs,
+/// group/tag folders, transfer progress, and quick-access service/session actions. Integrates with
+/// the server picker and draws folders using <see cref="DrawEntityFactory"/>.
+/// </summary>
 public class CompactUi : WindowMediatorSubscriberBase
 {
     private readonly ApiController _apiController;

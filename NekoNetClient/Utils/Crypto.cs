@@ -1,4 +1,11 @@
-﻿using System.Security.Cryptography;
+﻿/*
+        Neko-Net Client — Utils.Crypto
+        ------------------------------
+        Purpose
+        - Small crypto helpers for file SHA1 hashing (with retry on IO contention) and SHA256 hashing of strings
+            and (name, world) tuples with caching to avoid recomputation.
+*/
+using System.Security.Cryptography;
 using System.Text;
 
 namespace NekoNetClient.Utils;
@@ -11,6 +18,9 @@ public static class Crypto
     private static readonly Dictionary<string, string> _hashListSHA256 = new(StringComparer.Ordinal);
     private static readonly SHA256CryptoServiceProvider _sha256CryptoProvider = new();
 
+    /// <summary>
+    /// Computes a SHA1 hash for a file using sequential scanning and friendly retries in case the file is locked.
+    /// </summary>
     public static string GetFileHash(this string filePath)
     {
         using SHA1CryptoServiceProvider cryptoProvider = new();
@@ -32,6 +42,7 @@ public static class Crypto
         }
     }
 
+    /// <summary>Gets a cached or newly computed SHA256 for a (name, world) tuple.</summary>
     public static string GetHash256(this (string, ushort) playerToHash)
     {
         if (_hashListPlayersSHA256.TryGetValue(playerToHash, out var hash))
@@ -41,6 +52,7 @@ public static class Crypto
             BitConverter.ToString(_sha256CryptoProvider.ComputeHash(Encoding.UTF8.GetBytes(playerToHash.Item1 + playerToHash.Item2.ToString()))).Replace("-", "", StringComparison.Ordinal);
     }
 
+    /// <summary>Gets a cached or newly computed SHA256 for a string.</summary>
     public static string GetHash256(this string stringToHash)
     {
         return GetOrComputeHashSHA256(stringToHash);

@@ -1,4 +1,10 @@
-﻿using Dalamud.Game.Command;
+﻿/*
+    Neko-Net Client — Services.CommandManagerService
+    ----------------------------------------------
+    Purpose
+    - Registers and handles in-game chat/console commands that control client features and UI.
+*/
+using Dalamud.Game.Command;
 using Dalamud.Plugin.Services;
 using NekoNetClient.FileCache;
 using NekoNetClient.MareConfiguration;

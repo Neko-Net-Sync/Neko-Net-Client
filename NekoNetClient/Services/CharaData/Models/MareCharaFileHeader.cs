@@ -1,5 +1,15 @@
-﻿namespace NekoNetClient.Services.CharaData.Models;
+﻿//
+// Neko-Net Client — MareCharaFileHeader
+// Purpose: Binary container header for Mare Chara Data Files (MCDF). Encapsulates versioning and
+//          JSON data length for <see cref="MareCharaFileData"/>. Provides read/write helpers.
+//
+namespace NekoNetClient.Services.CharaData.Models;
 
+/// <summary>
+/// Represents the MCDF header. The binary format is:
+/// 'M''C''D''F' [byte version] [int32 jsonLength] [jsonPayload]
+/// followed by the raw file payload bytes written separately by the caller.
+/// </summary>
 public record MareCharaFileHeader(byte Version, MareCharaFileData CharaFileData)
 {
     public static readonly byte CurrentVersion = 1;
@@ -8,6 +18,7 @@ public record MareCharaFileHeader(byte Version, MareCharaFileData CharaFileData)
     public MareCharaFileData CharaFileData { get; set; } = CharaFileData;
     public string FilePath { get; private set; } = string.Empty;
 
+    /// <summary>Writes the MCDF header and embedded JSON metadata to the provided writer.</summary>
     public void WriteToStream(BinaryWriter writer)
     {
         writer.Write('M');
@@ -20,6 +31,10 @@ public record MareCharaFileHeader(byte Version, MareCharaFileData CharaFileData)
         writer.Write(charaFileDataArray);
     }
 
+    /// <summary>
+    /// Reads and decodes the MCDF header and JSON metadata. On success, returns a header with
+    /// the original file path recorded for later extraction.
+    /// </summary>
     public static MareCharaFileHeader? FromBinaryReader(string path, BinaryReader reader)
     {
         var chars = new string(reader.ReadChars(4));
@@ -41,6 +56,9 @@ public record MareCharaFileHeader(byte Version, MareCharaFileData CharaFileData)
         return decoded;
     }
 
+    /// <summary>
+    /// Advances a reader past the header and JSON metadata to the start of the raw payload data.
+    /// </summary>
     public static void AdvanceReaderToData(BinaryReader reader)
     {
         reader.ReadChars(4);

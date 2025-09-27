@@ -1,4 +1,9 @@
-﻿using Dalamud.Utility;
+﻿//
+// Neko-Net Client — GposeLobbyUserData
+// Purpose: Tracks per-user GPose session state, including world and pose deltas, target
+//          transitions for movement, and last applied CharaData timestamps to throttle updates.
+//
+using Dalamud.Utility;
 using NekoNet.API.Data;
 using NekoNet.API.Dto.CharaData;
 using NekoNetClient.Utils;
@@ -8,8 +13,14 @@ using System.Text;
 
 namespace NekoNetClient.Services.CharaData.Models;
 
+/// <summary>
+/// Encapsulates user-centric state used in GPose lobbies for visualizing positions, applying
+/// pose deltas, and coordinating effects. Provides helper logic to combine full and delta pose
+/// information into an applicable form for rendering.
+/// </summary>
 public sealed record GposeLobbyUserData(UserData UserData)
 {
+    /// <summary>Resets transient update flags and timestamps.</summary>
     public void Reset()
     {
         HasWorldDataUpdate = WorldData != null;
@@ -19,6 +30,7 @@ public sealed record GposeLobbyUserData(UserData UserData)
     }
 
     private WorldData? _worldData;
+    /// <summary>Latest world data; setting toggles the update flag.</summary>
     public WorldData? WorldData
     {
         get => _worldData; set
@@ -28,11 +40,13 @@ public sealed record GposeLobbyUserData(UserData UserData)
         }
     }
 
+    /// <summary>True when new world data is available and should be consumed.</summary>
     public bool HasWorldDataUpdate { get; set; } = false;
 
     private PoseData? _fullPoseData;
     private PoseData? _deltaPoseData;
 
+    /// <summary>Latest full pose data; setting re-computes applicable pose and flags an update.</summary>
     public PoseData? FullPoseData
     {
         get => _fullPoseData;
@@ -44,6 +58,7 @@ public sealed record GposeLobbyUserData(UserData UserData)
         }
     }
 
+    /// <summary>Latest delta pose; setting re-computes applicable pose and flags an update.</summary>
     public PoseData? DeltaPoseData
     {
         get => _deltaPoseData;
@@ -55,13 +70,20 @@ public sealed record GposeLobbyUserData(UserData UserData)
         }
     }
 
+    /// <summary>Computed pose taking deltas into account.</summary>
     public PoseData? ApplicablePoseData { get; private set; }
+    /// <summary>True if a new applicable pose is available.</summary>
     public bool HasPoseDataUpdate { get; set; } = false;
+    /// <summary>Optional VFX id spawned for this user.</summary>
     public Guid? SpawnedVfxId { get; set; }
+    /// <summary>Last known world position.</summary>
     public Vector3? LastWorldPosition { get; set; }
+    /// <summary>Target world position for smooth transitions.</summary>
     public Vector3? TargetWorldPosition { get; set; }
+    /// <summary>Time when the current transition started.</summary>
     public DateTime? UpdateStart { get; set; }
     private CharaDataDownloadDto? _charaData;
+    /// <summary>Latest chara data; sets the <see cref="LastUpdatedCharaData"/> timestamp.</summary>
     public CharaDataDownloadDto? CharaData
     {
         get => _charaData; set
@@ -71,9 +93,13 @@ public sealed record GposeLobbyUserData(UserData UserData)
         }
     }
 
+    /// <summary>Timestamp of the server-provided chara data's last update.</summary>
     public DateTime LastUpdatedCharaData { get; private set; } = DateTime.MaxValue;
+    /// <summary>When the local client last applied this user's chara data.</summary>
     public DateTime LastAppliedCharaDataDate { get; set; } = DateTime.MinValue;
+    /// <summary>Dalamud object address for the associated actor.</summary>
     public nint Address { get; set; }
+    /// <summary>Associated character name when address resolution isn't available yet.</summary>
     public string AssociatedCharaName { get; set; } = string.Empty;
 
     private PoseData? CombinePoseData()
@@ -126,11 +152,18 @@ public sealed record GposeLobbyUserData(UserData UserData)
         return output;
     }
 
+    /// <summary>Human-readable description of the last world data.</summary>
     public string WorldDataDescriptor { get; private set; } = string.Empty;
+    /// <summary>Computed map coordinates corresponding to <see cref="WorldData"/>.</summary>
     public Vector2 MapCoordinates { get; private set; }
+    /// <summary>The Lumina map resolved for the world position.</summary>
     public Lumina.Excel.Sheets.Map Map { get; private set; }
+    /// <summary>Reference to a handled chara entry when this user is currently applied locally.</summary>
     public HandledCharaDataEntry? HandledChara { get; set; }
 
+    /// <summary>
+    /// Computes a descriptive summary for the current world data and resolves map coordinates.
+    /// </summary>
     public async Task SetWorldDataDescriptor(DalamudUtilService dalamudUtilService)
     {
         if (WorldData == null)

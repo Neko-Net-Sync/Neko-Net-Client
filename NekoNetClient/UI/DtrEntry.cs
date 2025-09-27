@@ -1,4 +1,10 @@
-﻿using Dalamud.Game.Gui.Dtr;
+﻿//
+// Neko-Net Client — DtrEntry
+// Purpose: Adds a Neko-Net entry to Dalamud's DTR bar. Displays connection state and number of
+//          visible pairs, provides a tooltip list, and toggles main UI on click. Managed as a
+//          hosted service with a 1s refresh loop.
+//
+using Dalamud.Game.Gui.Dtr;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Plugin.Services;
@@ -13,6 +19,10 @@ using System.Runtime.InteropServices;
 
 namespace NekoNetClient.UI;
 
+/// <summary>
+/// Creates and maintains a DTR UI entry indicating connection and pairs-in-range. Displays a
+/// tooltip with names (optionally UIDs) and toggles the compact UI when clicked.
+/// </summary>
 public sealed class DtrEntry : IDisposable, IHostedService
 {
     private readonly ApiController _apiController;
@@ -28,6 +38,9 @@ public sealed class DtrEntry : IDisposable, IHostedService
     private string? _tooltip;
     private Colors _colors;
 
+    /// <summary>
+    /// Injects dependencies and prepares a lazy DTR entry that is initialized on demand.
+    /// </summary>
     public DtrEntry(ILogger<DtrEntry> logger, IDtrBar dtrBar, ConfigurationServiceBase<MareConfig> configService, MareMediator mareMediator, PairManager pairManager, ApiController apiController)
     {
         _logger = logger;
@@ -49,6 +62,7 @@ public sealed class DtrEntry : IDisposable, IHostedService
         }
     }
 
+    /// <summary>Starts the 1s update loop in the background.</summary>
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting DtrEntry");
@@ -57,6 +71,7 @@ public sealed class DtrEntry : IDisposable, IHostedService
         return Task.CompletedTask;
     }
 
+    /// <summary>Stops the update loop and cleans up resources.</summary>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _cancellationTokenSource.Cancel();
@@ -179,6 +194,9 @@ public sealed class DtrEntry : IDisposable, IHostedService
     private const byte _colorTypeForeground = 0x13;
     private const byte _colorTypeGlow = 0x14;
 
+    /// <summary>
+    /// Builds a SeString with foreground and glow color spans applied to the provided text.
+    /// </summary>
     private static SeString BuildColoredSeString(string text, Colors colors)
     {
         var ssb = new SeStringBuilder();
@@ -194,9 +212,11 @@ public sealed class DtrEntry : IDisposable, IHostedService
         return ssb.Build();
     }
 
+    /// <summary>Creates a RawPayload that changes text color for subsequent payloads.</summary>
     private static RawPayload BuildColorStartPayload(byte colorType, uint color)
         => new(unchecked([0x02, colorType, 0x05, 0xF6, byte.Max((byte)color, 0x01), byte.Max((byte)(color >> 8), 0x01), byte.Max((byte)(color >> 16), 0x01), 0x03]));
 
+    /// <summary>Creates a RawPayload that ends a color span started earlier.</summary>
     private static RawPayload BuildColorEndPayload(byte colorType)
         => new([0x02, colorType, 0x02, 0xEC, 0x03]);
 

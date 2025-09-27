@@ -1,4 +1,12 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿/*
+     Neko-Net Client — UI.DataAnalysisUi
+     -----------------------------------
+     Purpose
+     - Power-user window for inspecting analyzed character data: file types, sizes (original/compressed),
+         triangle counts, and conversion utilities (e.g., BC7). Subscribes to analysis results and offers
+         per-type/filter views and export operations.
+*/
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
@@ -15,6 +23,9 @@ using System.Numerics;
 
 namespace NekoNetClient.UI;
 
+/// <summary>
+/// UI window surfacing <see cref="CharacterAnalyzer"/> results and offering conversion/explore controls.
+/// </summary>
 public class DataAnalysisUi : WindowMediatorSubscriberBase
 {
     private readonly CharacterAnalyzer _characterAnalyzer;

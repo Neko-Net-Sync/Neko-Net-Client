@@ -1,4 +1,12 @@
-﻿using Dalamud.Memory;
+﻿/*
+        Neko-Net Client — Interop.VfxSpawnManager
+        ---------------------------------------
+        Purpose
+        - Thin wrapper for spawning, moving, and removing client-side VFX objects. Integrates with the
+            mediator to hide VFX during gpose/cutscenes and restore visibility afterwards. Relies on
+            game signatures to call private engine functions; use with care.
+*/
+using Dalamud.Memory;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility.Signatures;
 using Microsoft.Extensions.Logging;
@@ -65,6 +73,10 @@ public unsafe class VfxSpawnManager : DisposableMediatorSubscriberBase
 
     private readonly Dictionary<Guid, (nint Address, float Visibility)> _spawnedObjects = [];
 
+    /// <summary>
+    /// Creates a static VFX object from the given path and initial parameters.
+    /// </summary>
+    /// <returns>Pointer to the VFX struct or null if creation failed.</returns>
     private VfxStruct* SpawnStatic(string path, Vector3 pos, Quaternion rotation, float r, float g, float b, float a, Vector3 scale)
     {
         VfxStruct* vfx;
@@ -98,6 +110,10 @@ public unsafe class VfxSpawnManager : DisposableMediatorSubscriberBase
         return vfx;
     }
 
+    /// <summary>
+    /// Spawns a default orb VFX and tracks it by a generated id.
+    /// </summary>
+    /// <returns>Guid id if spawned, null otherwise.</returns>
     public Guid? SpawnObject(Vector3 position, Quaternion rotation, Vector3 scale, float r = 1f, float g = 1f, float b = 1f, float a = 0.5f)
     {
         Logger.LogDebug("Trying to Spawn orb VFX at {pos}, {rot}", position, rotation);
@@ -115,6 +131,9 @@ public unsafe class VfxSpawnManager : DisposableMediatorSubscriberBase
         return guid;
     }
 
+    /// <summary>
+    /// Updates the position of a previously spawned object.
+    /// </summary>
     public unsafe void MoveObject(Guid id, Vector3 newPosition)
     {
         if (_spawnedObjects.TryGetValue(id, out var vfxValue))

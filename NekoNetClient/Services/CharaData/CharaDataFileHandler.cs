@@ -1,4 +1,22 @@
-﻿using Dalamud.Game.ClientState.Objects.SubKinds;
+﻿//
+// Neko-Net Client — CharaDataFileHandler
+// Purpose: Prepare, download, extract, and upload files referenced by CharaData as well as
+//          snapshot local player data to construct MCDF files. Centralizes filesystem and
+//          cache interactions for CharaData operations.
+//
+// Highlights:
+// - ComputeMissingFiles: compares server-declared files to local cache and produces a missing list
+// - DownloadFilesAsync: orchestrates batched downloads, then resolves local file paths
+// - LoadCharaFileHeader/McdfExtractFiles: reads and extracts MCDF content with LZ4
+// - CreatePlayerData/UpdateCharaDataAsync: builds CharacterData, filters unsupported types, and updates DTOs
+// - SaveCharaFileAsync: serializes current player state into an MCDF container
+// - UploadFiles: forwards uploads via FileUploadManager
+//
+// Notes:
+// - All behavioral logic is unchanged; this commit adds documentation only.
+// - Logging provides verbose tracing for MCDF operations.
+//
+using Dalamud.Game.ClientState.Objects.SubKinds;
 using K4os.Compression.LZ4.Legacy;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
@@ -13,6 +31,11 @@ using NekoNetClient.WebAPI.Files;
 
 namespace NekoNetClient.Services.CharaData;
 
+/// <summary>
+/// Provides file-centric operations for CharaData such as computing missing assets, driving
+/// downloads/uploads, reading and writing Mare Chara Data Files (MCDF), and constructing
+/// a player appearance snapshot for sharing.
+/// </summary>
 public sealed class CharaDataFileHandler : IDisposable
 {
     private readonly DalamudUtilService _dalamudUtilService;
@@ -25,6 +48,9 @@ public sealed class CharaDataFileHandler : IDisposable
     private readonly PlayerDataFactory _playerDataFactory;
     private int _globalFileCounter = 0;
 
+    /// <summary>
+    /// Creates a new handler and the internal download manager used for batch operations.
+    /// </summary>
     public CharaDataFileHandler(ILogger<CharaDataFileHandler> logger, FileDownloadManagerFactory fileDownloadManagerFactory, FileUploadManager fileUploadManager, FileCacheManager fileCacheManager,
             DalamudUtilService dalamudUtilService, GameObjectHandlerFactory gameObjectHandlerFactory, PlayerDataFactory playerDataFactory)
     {
@@ -38,6 +64,11 @@ public sealed class CharaDataFileHandler : IDisposable
         _mareCharaFileDataFactory = new(fileCacheManager);
     }
 
+    /// <summary>
+    /// Determines which files are missing locally by consulting the cache and builds two outputs:
+    /// - A mod path map for already-cached files and swaps
+    /// - A list of missing file entries to download
+    /// </summary>
     public void ComputeMissingFiles(CharaDataDownloadDto charaDataDownloadDto, out Dictionary<string, string> modPaths, out List<FileReplacementData> missingFiles)
     {
         modPaths = [];
@@ -73,6 +104,12 @@ public sealed class CharaDataFileHandler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Builds a player appearance snapshot from the local state. When in GPose, resolves the
+    /// GPose actor for accurate data. Filters out non-shareable assets such as animations and
+    /// non-equipment VFX/ATEX before returning.
+    /// </summary>
+    /// <returns>The constructed <see cref="CharacterData"/> snapshot or null when unavailable.</returns>
     public async Task<CharacterData?> CreatePlayerData()
     {
         var chara = await _dalamudUtilService.GetPlayerCharacterAsync().ConfigureAwait(false);
@@ -115,6 +152,10 @@ public sealed class CharaDataFileHandler : IDisposable
         _fileDownloadManager.Dispose();
     }
 
+    /// <summary>
+    /// Initiates and executes the download pipeline for the missing files, then resolves their
+    /// final local paths and populates the provided mod path map.
+    /// </summary>
     public async Task DownloadFilesAsync(GameObjectHandler tempHandler, List<FileReplacementData> missingFiles, Dictionary<string, string> modPaths, CancellationToken token)
     {
         await _fileDownloadManager.InitiateDownloadList(tempHandler, missingFiles, token).ConfigureAwait(false);
@@ -131,6 +172,10 @@ public sealed class CharaDataFileHandler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Opens and decodes an MCDF header and returns it together with the expected payload size.
+    /// Intended as a fast preflight before extraction.
+    /// </summary>
     public Task<(MareCharaFileHeader loadedCharaFile, long expectedLength)> LoadCharaFileHeader(string filePath)
     {
         try
@@ -180,6 +225,10 @@ public sealed class CharaDataFileHandler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Extracts files from an MCDF and writes them to temporary files in the cache directory.
+    /// Returns a mapping of each GamePath to the created temporary file path.
+    /// </summary>
     public Dictionary<string, string> McdfExtractFiles(MareCharaFileHeader? charaFileHeader, long expectedLength, List<string> extractedFiles)
     {
         if (charaFileHeader == null) return [];
@@ -216,6 +265,10 @@ public sealed class CharaDataFileHandler : IDisposable
         return gamePathToFilePath;
     }
 
+    /// <summary>
+    /// Updates a CharaData update DTO with freshly captured local player data. Properties are
+    /// nulled when no data is present to signal no-change for the server.
+    /// </summary>
     public async Task UpdateCharaDataAsync(CharaDataExtendedUpdateDto updateDto)
     {
         var data = await CreatePlayerData().ConfigureAwait(false);
@@ -246,6 +299,10 @@ public sealed class CharaDataFileHandler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Serializes the current local player appearance and files into an MCDF and writes it to
+    /// disk atomically via a temporary file, preserving partial writes in case of failure.
+    /// </summary>
     internal async Task SaveCharaFileAsync(string description, string filePath)
     {
         var tempFilePath = filePath + ".tmp";
@@ -295,6 +352,10 @@ public sealed class CharaDataFileHandler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Uploads a list of files using the configured upload manager, reporting progress via the
+    /// provided progress object.
+    /// </summary>
     internal async Task<List<string>> UploadFiles(List<string> fileList, ValueProgress<string> uploadProgress, CancellationToken token)
     {
         return await _fileUploadManager.UploadFiles(fileList, uploadProgress, token).ConfigureAwait(false);

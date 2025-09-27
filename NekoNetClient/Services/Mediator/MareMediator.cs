@@ -1,4 +1,17 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿/*
+     Neko-Net Client — Services.Mediator.MareMediator
+     ------------------------------------------------
+     Purpose
+     - Central message bus for the client, providing pub/sub semantics with optional same-thread execution and
+         background queue processing.
+
+     Behavior
+     - Subscribers are registered per message type; messages can request same-thread execution via KeepThreadContext
+         or be enqueued and processed asynchronously.
+     - Execution is ordered to prioritize IHighPriorityMediatorSubscriber instances and supports performance logging.
+     - Errors are rate-limited per-subscriber to avoid log spam.
+*/
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.MareConfiguration;
 using System.Collections.Concurrent;
@@ -7,6 +20,10 @@ using System.Text;
 
 namespace NekoNetClient.Services.Mediator;
 
+/// <summary>
+/// Lightweight mediator/event aggregator for delivering <see cref="MessageBase"/> payloads to subscribed
+/// components. Supports background queue processing, optional same-thread dispatch, and priority ordering.
+/// </summary>
 public sealed class MareMediator : IHostedService
 {
     private readonly object _addRemoveLock = new();
@@ -45,6 +62,10 @@ public sealed class MareMediator : IHostedService
         }
     }
 
+    /// <summary>
+    /// Publishes a message. If <see cref="MessageBase.KeepThreadContext"/> is true, executes immediately on the
+    /// current thread; otherwise, enqueues for background processing.
+    /// </summary>
     public void Publish<T>(T message) where T : MessageBase
     {
         if (message.KeepThreadContext)
@@ -57,6 +78,9 @@ public sealed class MareMediator : IHostedService
         }
     }
 
+    /// <summary>
+    /// Starts the background processing loop and initializes the mediator.
+    /// </summary>
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting MareMediator");
@@ -88,6 +112,9 @@ public sealed class MareMediator : IHostedService
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Stops background processing and clears the message queue.
+    /// </summary>
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _messageQueue.Clear();
@@ -96,6 +123,9 @@ public sealed class MareMediator : IHostedService
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Subscribes a handler for the specified message type.
+    /// </summary>
     public void Subscribe<T>(IMediatorSubscriber subscriber, Action<T> action) where T : MessageBase
     {
         lock (_addRemoveLock)
@@ -109,6 +139,9 @@ public sealed class MareMediator : IHostedService
         }
     }
 
+    /// <summary>
+    /// Unsubscribes a previously registered handler for the specified message type.
+    /// </summary>
     public void Unsubscribe<T>(IMediatorSubscriber subscriber) where T : MessageBase
     {
         lock (_addRemoveLock)
@@ -187,6 +220,9 @@ public sealed class MareMediator : IHostedService
         }
     }
 
+    /// <summary>
+    /// Enables processing of the message queue, typically after initialization steps complete.
+    /// </summary>
     public void StartQueueProcessing()
     {
         _logger.LogInformation("Starting Message Queue Processing");

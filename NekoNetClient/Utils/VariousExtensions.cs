@@ -1,4 +1,11 @@
-﻿using Dalamud.Game.ClientState.Objects.Types;
+﻿/*
+    Neko-Net Client — Utils.VariousExtensions
+    ---------------------------------------
+    Purpose
+    - Miscellaneous extensions for byte-size formatting, CancellationTokenSource helpers, deep clone,
+      server label normalization, game object indexing, and character data comparison logic.
+*/
+using Dalamud.Game.ClientState.Objects.Types;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data.Enum;
 using NekoNetClient.PlayerData.Data;
@@ -10,6 +17,7 @@ namespace NekoNetClient.Utils;
 
 public static class VariousExtensions
 {
+    /// <summary>Formats a number of bytes using a human-readable IEC suffix.</summary>
     public static string ToByteString(this int bytes, bool addSuffix = true)
     {
         string[] suffix = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -23,6 +31,7 @@ public static class VariousExtensions
         return addSuffix ? $"{dblSByte:0.00} {suffix[i]}" : $"{dblSByte:0.00}";
     }
 
+    /// <summary>Formats a number of bytes using a human-readable IEC suffix.</summary>
     public static string ToByteString(this long bytes, bool addSuffix = true)
     {
         string[] suffix = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -36,6 +45,9 @@ public static class VariousExtensions
         return addSuffix ? $"{dblSByte:0.00} {suffix[i]}" : $"{dblSByte:0.00}";
     }
 
+    /// <summary>
+    /// Safely cancels and disposes a <see cref="CancellationTokenSource"/>. Ignores <see cref="ObjectDisposedException"/>.
+    /// </summary>
     public static void CancelDispose(this CancellationTokenSource? cts)
     {
         try
@@ -49,12 +61,19 @@ public static class VariousExtensions
         }
     }
 
+    /// <summary>
+    /// Cancels and disposes an existing <see cref="CancellationTokenSource"/> and returns a fresh instance.
+    /// </summary>
     public static CancellationTokenSource CancelRecreate(this CancellationTokenSource? cts)
     {
         cts?.CancelDispose();
         return new CancellationTokenSource();
     }
 
+    /// <summary>
+    /// Compares new character data against old to determine which components require updates per <see cref="ObjectKind"/>.
+    /// Respects force flags to ensure mod/customization reapplication when requested.
+    /// </summary>
     public static Dictionary<ObjectKind, HashSet<PlayerChanges>> CheckUpdatedData(this CharacterData newData, Guid applicationBase,
         CharacterData? oldData, ILogger logger, PairHandler cachedPlayer, bool forceApplyCustomization, bool forceApplyMods)
     {
@@ -208,11 +227,15 @@ public static class VariousExtensions
         return charaDataToUpdate;
     }
 
+    /// <summary>Deep clones an object through JSON serialization.</summary>
     public static T DeepClone<T>(this T obj)
     {
         return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(obj))!;
     }
 
+    /// <summary>
+    /// Normalizes an API URL (including ws/wss) to a human-readable label host[:port].
+    /// </summary>
     public static string ToServerLabel(this string? apiUrl)
     {
         if (string.IsNullOrEmpty(apiUrl)) return string.Empty;
@@ -229,6 +252,9 @@ public static class VariousExtensions
         }
     }
 
+    /// <summary>
+    /// Retrieves the object table index from a Dalamud <see cref="IGameObject"/> using unsafe memory access.
+    /// </summary>
     public static unsafe int? ObjectTableIndex(this IGameObject? gameObject)
     {
         if (gameObject == null || gameObject.Address == IntPtr.Zero)

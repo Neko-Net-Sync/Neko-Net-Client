@@ -1,4 +1,11 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿/*
+     Neko-Net Client — UI.DownloadUi
+     -------------------------------
+     Purpose
+     - Small overlay window and world-space bars showing current download/upload progress per player.
+         Subscribes to mediator messages to keep an in-memory view of active transfers.
+*/
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Colors;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.MareConfiguration;
@@ -12,6 +19,10 @@ using System.Numerics;
 
 namespace NekoNetClient.UI;
 
+/// <summary>
+/// Overlay for live transfer feedback: queued/downloading/decompressing counts and total bytes per player,
+/// and optional world-space progress bars.
+/// </summary>
 public class DownloadUi : WindowMediatorSubscriberBase
 {
     private readonly MareConfigService _configService;

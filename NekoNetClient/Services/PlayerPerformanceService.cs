@@ -1,3 +1,9 @@
+/*
+    Neko-Net Client — Services.PlayerPerformanceService
+    --------------------------------------------------
+    Purpose
+    - Computes VRAM/triangle thresholds and auto-pauses heavy applies; evaluates risk before large downloads.
+*/
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNet.API.Data.Enum;

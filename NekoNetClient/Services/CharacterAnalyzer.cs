@@ -1,4 +1,11 @@
-﻿using Lumina.Data.Files;
+﻿/*
+     Neko-Net Client — Services.CharacterAnalyzer
+     -------------------------------------------
+     Purpose
+     - Performs analysis of character data: enumerates file replacements, resolves cache entries, computes
+         extracted/compressed sizes, and optional triangle counts via XivDataAnalyzer. Emits summarized logs.
+*/
+using Lumina.Data.Files;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNet.API.Data.Enum;
@@ -30,17 +37,26 @@ public sealed class CharacterAnalyzer : MediatorSubscriberBase, IDisposable
         _xivDataAnalyzer = modelAnalyzer;
     }
 
+    
+    /// <summary>1-based index of the file currently being analyzed within the current compute run.</summary>
     public int CurrentFile { get; internal set; }
+    /// <summary>True when an analysis compute run is in progress.</summary>
     public bool IsAnalysisRunning => _analysisCts != null;
+    /// <summary>Total number of files to analyze for the current compute run.</summary>
     public int TotalFiles { get; internal set; }
     internal Dictionary<ObjectKind, Dictionary<string, FileDataEntry>> LastAnalysis { get; } = [];
 
+    /// <summary>Cancels any running analysis compute.</summary>
     public void CancelAnalyze()
     {
         _analysisCts?.CancelDispose();
         _analysisCts = null;
     }
 
+    /// <summary>
+    /// Computes missing analysis for cached data and optionally prints a detailed summary. When <paramref name="recalculate"/>
+    /// is true, recomputes sizes even for entries marked computed.
+    /// </summary>
     public async Task ComputeAnalysis(bool print = true, bool recalculate = false)
     {
         Logger.LogDebug("=== Calculating Character Analysis ===");

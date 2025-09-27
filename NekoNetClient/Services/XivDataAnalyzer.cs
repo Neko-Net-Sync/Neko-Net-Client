@@ -1,4 +1,10 @@
-﻿using FFXIVClientStructs.FFXIV.Client.Game.Character;
+﻿/*
+    Neko-Net Client — Services.XivDataAnalyzer
+    ----------------------------------------
+    Purpose
+    - Calculates geometry metrics (e.g., triangle counts) for files referenced by character data to aid analysis.
+*/
+using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
 using FFXIVClientStructs.Havok.Animation;
 using FFXIVClientStructs.Havok.Common.Base.Types;

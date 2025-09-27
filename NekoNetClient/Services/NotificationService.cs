@@ -1,4 +1,10 @@
-﻿using Dalamud.Game.Text.SeStringHandling;
+﻿/*
+    Neko-Net Client — Services.NotificationService
+    --------------------------------------------
+    Purpose
+    - Shows transient and persistent notifications to the user from mediator events.
+*/
+using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin.Services;
 using Microsoft.Extensions.Hosting;

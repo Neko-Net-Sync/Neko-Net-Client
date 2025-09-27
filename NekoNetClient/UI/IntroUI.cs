@@ -1,4 +1,10 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿//
+// Neko-Net Client — IntroUi
+// Purpose: First-run setup and onboarding window. Guides user through prerequisites, import
+//          (Penumbra/Glamourer) configuration, cache selection/reuse, language selection, and
+//          accepting ToS before enabling the main UI.
+//
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility;
@@ -21,6 +27,11 @@ using System.Text.RegularExpressions;
 
 namespace NekoNetClient.UI;
 
+/// <summary>
+/// Onboarding/Setup UI that helps the user get Neko-Net ready: check plugin dependencies,
+/// pick language, import settings from existing configurations, choose a cache location, and
+/// accept the Terms of Service. Closes itself when setup completes and signals the main UI.
+/// </summary>
 public partial class IntroUi : WindowMediatorSubscriberBase
 {
     private readonly MareConfigService _configService;

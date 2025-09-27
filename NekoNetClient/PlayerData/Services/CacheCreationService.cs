@@ -1,4 +1,10 @@
-﻿using Microsoft.Extensions.Logging;
+﻿/*
+    Neko-Net Client — PlayerData.Services.CacheCreationService
+    ---------------------------------------------------------
+    Purpose
+    - Creates and maintains cache entries for visible objects by reacting to mediator messages.
+*/
+using Microsoft.Extensions.Logging;
 using NekoNet.API.Data.Enum;
 using NekoNetClient.PlayerData.Data;
 using NekoNetClient.PlayerData.Factories;

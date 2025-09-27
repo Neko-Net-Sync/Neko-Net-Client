@@ -1,4 +1,11 @@
-﻿using Dalamud.Utility;
+﻿/*
+    Neko-Net Client — Services.ServerConfiguration.ServerConfigurationManager
+    ------------------------------------------------------------------------
+    Purpose
+    - Central orchestrator for server configuration, credentials, per-server notes/tags, and API base routing.
+    - Provides helpers for auth retrieval (OAuth/SecretKey), domain→endpoint mapping, and auto-populating notes.
+*/
+using Dalamud.Utility;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Routes;

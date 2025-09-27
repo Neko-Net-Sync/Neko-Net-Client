@@ -1,10 +1,23 @@
-﻿using Dalamud.Plugin.Services;
+﻿/*
+    Neko-Net Client — Interop.DalamudLogger
+    --------------------------------------
+    Purpose
+    - Adapter to bridge Microsoft.Extensions.Logging to Dalamud's IPluginLog. Formats messages,
+      respects user-configured log level, and annotates logs when unsupported game modifications
+      are detected. Keeps categories compact to fit DTR.
+*/
+using Dalamud.Plugin.Services;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.MareConfiguration;
 using System.Text;
 
 namespace NekoNetClient.Interop;
 
+/// <summary>
+/// ILogger implementation that writes to Dalamud's <see cref="IPluginLog"/>.
+/// This keeps a compact category, applies the configured log level from <see cref="MareConfigService"/>,
+/// and annotates messages when running with modified game files to clearly mark unsupported scenarios.
+/// </summary>
 internal sealed class DalamudLogger : ILogger
 {
     private readonly MareConfigService _mareConfigService;
@@ -12,6 +25,13 @@ internal sealed class DalamudLogger : ILogger
     private readonly IPluginLog _pluginLog;
     private readonly bool _hasModifiedGameFiles;
 
+    /// <summary>
+    /// Creates a new <see cref="DalamudLogger"/> for a specific category.
+    /// </summary>
+    /// <param name="name">Category name (already compacted by the provider).</param>
+    /// <param name="mareConfigService">Config service providing the current <c>LogLevel</c>.</param>
+    /// <param name="pluginLog">Dalamud plugin logger sink.</param>
+    /// <param name="hasModifiedGameFiles">Whether the client detected modified game files.</param>
     public DalamudLogger(string name, MareConfigService mareConfigService, IPluginLog pluginLog, bool hasModifiedGameFiles)
     {
         _name = name;
@@ -20,13 +40,16 @@ internal sealed class DalamudLogger : ILogger
         _hasModifiedGameFiles = hasModifiedGameFiles;
     }
 
-    public IDisposable BeginScope<TState>(TState state) => default!;
+    /// <inheritdoc />
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull => default!;
 
+    /// <inheritdoc />
     public bool IsEnabled(LogLevel logLevel)
     {
         return (int)_mareConfigService.Current.LogLevel <= (int)logLevel;
     }
 
+    /// <inheritdoc />
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel)) return;

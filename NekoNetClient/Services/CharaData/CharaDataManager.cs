@@ -1,4 +1,12 @@
-﻿using Dalamud.Game.ClientState.Objects.Types;
+﻿/*
+     Neko-Net Client — Services.CharaData.CharaDataManager
+     -----------------------------------------------------
+     Purpose
+     - Orchestrates creation, retrieval, upload, download, and application of character data (MCD). Coordinates
+         with IPC services, file handlers, and the API controller. Manages background tasks, caches, and UI-binding
+         progress properties.
+*/
+using Dalamud.Game.ClientState.Objects.Types;
 using K4os.Compression.LZ4.Legacy;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
@@ -17,6 +25,10 @@ using System.Text;
 
 namespace NekoNetClient.Services.CharaData;
 
+/// <summary>
+/// Central manager for CharaData lifecycle: owns in-memory caches, starts async operations, reacts to
+/// connect/disconnect events, and exposes progress/tasks for UI binding.
+/// </summary>
 public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
 {
     private readonly ApiController _apiController;

@@ -1,4 +1,10 @@
-﻿using Microsoft.Extensions.Logging;
+﻿/*
+    Neko-Net Client — Services.MareProfileManager
+    -------------------------------------------
+    Purpose
+    - Maintains cached profiles and mediates profile retrieval/display for pairs across services.
+*/
+using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNet.API.Data.Comparer;
 using NekoNet.API.Dto.User;

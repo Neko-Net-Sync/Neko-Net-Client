@@ -1,12 +1,26 @@
-﻿using NekoNet.API.Data;
+﻿//
+// Neko-Net Client — CharaDataExtendedUpdateDto
+// Purpose: Wraps CharaDataUpdateDto and provides diff-aware setters that null out unchanged
+//          properties to minimize payloads. Also exposes mutable lists for easy UI editing.
+//
+using NekoNet.API.Data;
 using NekoNet.API.Dto.CharaData;
 
 namespace NekoNetClient.Services.CharaData.Models;
 
+/// <summary>
+/// Diff-driven wrapper around <see cref="CharaDataUpdateDto"/> that tracks local edits against a
+/// baseline <see cref="CharaDataFullDto"/> and clears properties back to null when unchanged, so
+/// the server receives minimal updates.
+/// </summary>
 public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
 {
     private readonly CharaDataFullDto _charaDataFullDto;
 
+    /// <summary>
+    /// Creates the wrapper and initializes working copies of allowed users, groups, and poses
+    /// from the provided base data.
+    /// </summary>
     public CharaDataExtendedUpdateDto(CharaDataUpdateDto dto, CharaDataFullDto charaDataFullDto) : base(dto)
     {
         _charaDataFullDto = charaDataFullDto;
@@ -20,6 +34,7 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }).ToList();
     }
 
+    /// <summary>Returns a clean update DTO containing only changed properties.</summary>
     public CharaDataUpdateDto BaseDto => new(Id)
     {
         AllowedUsers = AllowedUsers,
@@ -36,6 +51,10 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         Poses = Poses
     };
 
+    /// <summary>
+    /// Diff-aware ManipulationData. Returns baseline value when unchanged; sets null when equal
+    /// to baseline to avoid redundant updates.
+    /// </summary>
     public new string ManipulationData
     {
         get
@@ -52,6 +71,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>
+    /// Diff-aware Description.
+    /// </summary>
     public new string Description
     {
         get
@@ -68,6 +90,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>
+    /// Diff-aware ExpiryDate; setter is private for controlled updates via helpers.
+    /// </summary>
     public new DateTime ExpiryDate
     {
         get
@@ -84,6 +109,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>
+    /// Diff-aware AccessType.
+    /// </summary>
     public new AccessTypeDto AccessType
     {
         get
@@ -101,6 +129,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>
+    /// Diff-aware ShareType.
+    /// </summary>
     public new ShareTypeDto ShareType
     {
         get
@@ -118,6 +149,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>
+    /// Diff-aware FileGamePaths.
+    /// </summary>
     public new List<GamePathEntry>? FileGamePaths
     {
         get
@@ -135,6 +169,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>
+    /// Diff-aware FileSwaps.
+    /// </summary>
     public new List<GamePathEntry>? FileSwaps
     {
         get
@@ -152,6 +189,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>
+    /// Diff-aware GlamourerData.
+    /// </summary>
     public new string? GlamourerData
     {
         get
@@ -168,6 +208,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>
+    /// Diff-aware CustomizeData.
+    /// </summary>
     public new string? CustomizeData
     {
         get
@@ -184,21 +227,26 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>Mutable working list for UI to manage allowed users.</summary>
     public IEnumerable<UserData> UserList => _userList;
     private readonly List<UserData> _userList;
 
+    /// <summary>Mutable working list for UI to manage allowed groups.</summary>
     public IEnumerable<GroupData> GroupList => _groupList;
     private readonly List<GroupData> _groupList;
 
+    /// <summary>Mutable working list for UI to manage poses.</summary>
     public IEnumerable<PoseEntry> PoseList => _poseList;
     private readonly List<PoseEntry> _poseList;
 
+    /// <summary>Adds a user to the working list and updates the diff.</summary>
     public void AddUserToList(string user)
     {
         _userList.Add(new(user, null));
         UpdateAllowedUsers();
     }
 
+    /// <summary>Adds a group to the working list and updates the diff.</summary>
     public void AddGroupToList(string group)
     {
         _groupList.Add(new(group, null));
@@ -225,24 +273,31 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>Removes a user and updates the diff.</summary>
     public void RemoveUserFromList(string user)
     {
         _userList.RemoveAll(u => string.Equals(u.UID, user, StringComparison.Ordinal));
         UpdateAllowedUsers();
     }
 
+    /// <summary>Removes a group and updates the diff.</summary>
     public void RemoveGroupFromList(string group)
     {
         _groupList.RemoveAll(u => string.Equals(u.GID, group, StringComparison.Ordinal));
         UpdateAllowedGroups();
     }
 
+    /// <summary>Adds a new empty pose to the working list and updates the diff.</summary>
     public void AddPose()
     {
         _poseList.Add(new PoseEntry(null));
         UpdatePoseList();
     }
 
+    /// <summary>
+    /// Removes a pose from the working list. When the pose existed previously, fields are nulled
+    /// out to signal deletion to the server. For new poses, the entry is removed entirely.
+    /// </summary>
     public void RemovePose(PoseEntry entry)
     {
         if (entry.Id != null)
@@ -259,6 +314,10 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         UpdatePoseList();
     }
 
+    /// <summary>
+    /// Rebuilds the Poses list based on the working list and nulls the property when unchanged
+    /// compared to the baseline.
+    /// </summary>
     public void UpdatePoseList()
     {
         Poses = [.. _poseList];
@@ -268,6 +327,7 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>Sets the expiry to 7 days from now or clears it based on the flag.</summary>
     public void SetExpiry(bool expiring)
     {
         if (expiring)
@@ -281,6 +341,7 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }
     }
 
+    /// <summary>Sets the expiry date to a specific Y-M-D in UTC.</summary>
     public void SetExpiry(int year, int month, int day)
     {
         int daysInMonth = DateTime.DaysInMonth(year, month);
@@ -288,6 +349,10 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         ExpiryDate = new DateTime(year, month, day, 0, 0, 0, DateTimeKind.Utc);
     }
 
+    /// <summary>
+    /// Resets all changes back to the baseline by nulling changed properties and restoring
+    /// working lists from the source data.
+    /// </summary>
     internal void UndoChanges()
     {
         base.Description = null;
@@ -310,6 +375,10 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         }));
     }
 
+    /// <summary>
+    /// Reverts a deletion for an existing pose by restoring the original values from the baseline
+    /// and updating the pose list diff.
+    /// </summary>
     internal void RevertDeletion(PoseEntry pose)
     {
         if (pose.Id == null) return;
@@ -321,6 +390,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         UpdatePoseList();
     }
 
+    /// <summary>
+    /// Determines whether the provided pose differs from the baseline.
+    /// </summary>
     internal bool PoseHasChanges(PoseEntry pose)
     {
         if (pose.Id == null) return false;
@@ -331,6 +403,7 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
             || pose.WorldData != oldPose.WorldData;
     }
 
+    /// <summary>True when any property is currently set to be sent to the server.</summary>
     public bool HasChanges =>
                 base.Description != null
                 || base.ExpiryDate != null
@@ -345,6 +418,7 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
                 || base.ManipulationData != null
                 || Poses != null;
 
+    /// <summary>Compares appearance-relevant fields to the baseline for UI convenience.</summary>
     public bool IsAppearanceEqual =>
         string.Equals(GlamourerData, _charaDataFullDto.GlamourerData, StringComparison.Ordinal)
         && string.Equals(CustomizeData, _charaDataFullDto.CustomizeData, StringComparison.Ordinal)

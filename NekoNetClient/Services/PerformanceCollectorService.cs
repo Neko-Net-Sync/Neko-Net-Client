@@ -1,4 +1,10 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿/*
+    Neko-Net Client — Services.PerformanceCollectorService
+    -----------------------------------------------------
+    Purpose
+    - Lightweight performance probe utility to time critical sections and optionally log them for diagnostics.
+*/
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.MareConfiguration;
 using NekoNetClient.Utils;

@@ -1,4 +1,11 @@
-﻿using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
+﻿/*
+     Neko-Net Client — Services.CharaData.CharaDataNearbyManager
+     -----------------------------------------------------------
+     Purpose
+     - Computes and maintains a filtered list of nearby shared character poses, spawns/despawns VFX markers
+         for hovered entries, and keeps the list up-to-date on framework/cutscene updates.
+*/
+using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNetClient.Interop;
@@ -10,6 +17,9 @@ using System.Numerics;
 
 namespace NekoNetClient.Services.CharaData;
 
+/// <summary>
+/// Maintains nearby shareable character data entries and visual markers; updates live using mediator events.
+/// </summary>
 public sealed class CharaDataNearbyManager : DisposableMediatorSubscriberBase
 {
     public record NearbyCharaDataEntry

@@ -23,6 +23,18 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using GameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
+/*
+     Neko-Net Client — Services.DalamudUtilService
+     --------------------------------------------
+     Purpose
+     - Safe gateway to Dalamud and FFXIV client state: object table access, framework-thread utilities,
+         zoning/cutscene/combat state, world/job/territory/map lookup, and transient player lookup caches.
+
+     Behavior
+     - Enforces framework-thread execution for pointer-sensitive operations; exposes helpers for finding
+         players by ident or name, scheduling actions when not drawing, and tracking GPose/cutscene states.
+     - Publishes mediator messages for targeting, census updates, cache creation, and more.
+*/
 namespace NekoNetClient.Services;
 
 public class DalamudUtilService : IHostedService, IMediatorSubscriber
@@ -163,9 +175,13 @@ public class DalamudUtilService : IHostedService, IMediatorSubscriber
     public bool IsInCombatOrPerforming { get; private set; } = false;
     public bool HasModifiedGameFiles => _gameData.HasModifiedGameDataFiles;
     public uint ClassJobId => _classJobId!.Value;
+    /// <summary>Lazy-loaded job data keyed by job row ID.</summary>
     public Lazy<Dictionary<uint, string>> JobData { get; private set; }
+    /// <summary>Lazy-loaded world data keyed by world ID with names.</summary>
     public Lazy<Dictionary<ushort, string>> WorldData { get; private set; }
+    /// <summary>Lazy-loaded territory names keyed by territory ID.</summary>
     public Lazy<Dictionary<uint, string>> TerritoryData { get; private set; }
+    /// <summary>Lazy-loaded map metadata containing Lumina Map row + display name.</summary>
     public Lazy<Dictionary<uint, (Map Map, string MapName)>> MapData { get; private set; }
     public bool IsLodEnabled { get; private set; }
     public MareMediator Mediator { get; }

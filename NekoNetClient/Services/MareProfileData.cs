@@ -1,4 +1,10 @@
-﻿namespace NekoNetClient.Services;
+﻿/*
+    Neko-Net Client — Services.MareProfileData
+    ----------------------------------------
+    Purpose
+    - Data container and helper methods for profile details shown in UI panels.
+*/
+namespace NekoNetClient.Services;
 
 public record MareProfileData(bool IsFlagged, bool IsNSFW, string Base64ProfilePicture, string Base64SupporterPicture, string Description)
 {

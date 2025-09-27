@@ -1,4 +1,10 @@
-﻿using Microsoft.Extensions.Logging;
+﻿/*
+    Neko-Net Client — Services.UiFactory
+    -----------------------------------
+    Purpose
+    - Creates and returns UI windows/components used by the client, centralizing dependencies and setup.
+*/
+using Microsoft.Extensions.Logging;
 using NekoNet.API.Dto.Group;
 using NekoNetClient.PlayerData.Pairs;
 using NekoNetClient.Services.Mediator;

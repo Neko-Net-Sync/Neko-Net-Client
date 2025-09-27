@@ -1,4 +1,9 @@
-﻿using Dalamud.Utility;
+﻿//
+// Neko-Net Client — PoseEntryExtended
+// Purpose: UI-friendly extension of PoseEntry that precomputes map coordinates, world descriptors,
+//          and vector/quaternion structures for consumption by overlays or inspectors.
+//
+using Dalamud.Utility;
 using Lumina.Excel.Sheets;
 using NekoNet.API.Dto.CharaData;
 using System.Globalization;
@@ -7,6 +12,10 @@ using System.Text;
 
 namespace NekoNetClient.Services.CharaData.Models;
 
+/// <summary>
+/// Extends a <see cref="PoseEntry"/> with derived information like map coordinates and nicely
+/// formatted world data strings. Uses <see cref="DalamudUtilService"/> to resolve mapping info.
+/// </summary>
 public sealed record PoseEntryExtended : PoseEntry
 {
     private PoseEntryExtended(PoseEntry basePose, CharaDataMetaInfoExtendedDto parent) : base(basePose)
@@ -21,15 +30,27 @@ public sealed record PoseEntryExtended : PoseEntry
         MetaInfo = parent;
     }
 
+    /// <summary>Back-reference to the extended meta info that owns this pose entry.</summary>
     public CharaDataMetaInfoExtendedDto MetaInfo { get; }
+    /// <summary>True if the pose has non-empty pose data.</summary>
     public bool HasPoseData { get; }
+    /// <summary>True if the pose contains world data.</summary>
     public bool HasWorldData { get; }
+    /// <summary>World position vector derived from world data.</summary>
     public Vector3 Position { get; } = new();
+    /// <summary>Map coordinates resolved via Dalamud.</summary>
     public Vector2 MapCoordinates { get; private set; } = new();
+    /// <summary>World rotation quaternion derived from world data.</summary>
     public Quaternion Rotation { get; } = new();
+    /// <summary>Resolved Lumina map reference when world data is present.</summary>
     public Map Map { get; private set; }
+    /// <summary>Human-readable description of the world data (server, map, ward, coords).</summary>
     public string WorldDataDescriptor { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// Factory that builds an extended pose from a base entry and resolves mapping/descriptor
+    /// fields asynchronously using the provided Dalamud utilities.
+    /// </summary>
     public static async Task<PoseEntryExtended> Create(PoseEntry baseEntry, CharaDataMetaInfoExtendedDto parent, DalamudUtilService dalamudUtilService)
     {
         PoseEntryExtended newPose = new(baseEntry, parent);

@@ -1,4 +1,11 @@
-﻿using Dalamud.Game.ClientState.Objects.SubKinds;
+﻿/*
+     Neko-Net Client — Services.CharaData.CharaDataGposeTogetherManager
+     ------------------------------------------------------------------
+     Purpose
+     - Manages GPose lobby lifecycle: creating/joining/leaving lobbies, sharing character data, world/pose updates,
+         and coordinating file upload/push events. Hooks mediator events for GPose start/end and framework updates.
+*/
+using Dalamud.Game.ClientState.Objects.SubKinds;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNet.API.Data.Enum;
@@ -14,6 +21,9 @@ using System.Text.Json.Nodes;
 
 namespace NekoNetClient.Services.CharaData;
 
+/// <summary>
+/// Coordinator for GPose Together workflows: lobby state, user list, pose/world data exchange, and VFX markers.
+/// </summary>
 public class CharaDataGposeTogetherManager : DisposableMediatorSubscriberBase
 {
     private readonly ApiController _apiController;

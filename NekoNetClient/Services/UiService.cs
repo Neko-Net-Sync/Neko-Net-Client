@@ -1,4 +1,11 @@
-﻿using Dalamud.Interface;
+﻿/*
+     Neko-Net Client — Services.UiService
+     -----------------------------------
+     Purpose
+     - Central coordinator for rendering and toggling UIs, wiring mediator messages to window visibility,
+         and managing per-frame UI updates.
+*/
+using Dalamud.Interface;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Windowing;
 using Microsoft.Extensions.Logging;

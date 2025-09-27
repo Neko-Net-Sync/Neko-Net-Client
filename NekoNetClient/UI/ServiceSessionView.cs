@@ -1,3 +1,10 @@
+/*
+     Neko-Net Client — UI.ServiceSessionView
+     --------------------------------------
+     Purpose
+     - Lightweight, reusable view that renders a session (pairs + folders) for a specific service.
+         Shows connection state, shard/CDN/last-push info, and provides filtering per service.
+*/
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
@@ -20,7 +27,9 @@ using System.Numerics;
 
 namespace NekoNetClient.UI;
 
-// Lightweight, reusable view that renders a session (pairs + folders) for a specific service.
+/// <summary>
+/// Lightweight, reusable view that renders a session (pairs + folders) for a specific service.
+/// </summary>
 internal sealed class ServiceSessionView
 {
     private readonly ILogger _log;

@@ -1,3 +1,9 @@
+//
+// Neko-Net Client — SettingsUi
+// Purpose: Full settings window for Neko-Net. Manages servers, authentication, file cache,
+//          compaction, performance, uploads/downloads, and advanced diagnostics across tabs.
+//          Subscribes to mediator events for reactive updates.
+//
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
@@ -34,6 +40,11 @@ using System.Text.Json;
 
 namespace NekoNetClient.UI;
 
+/// <summary>
+/// Comprehensive settings UI covering server profiles, authentication, cache management,
+/// compaction, performance telemetry, upload/download diagnostics, and more. Hooks mediator
+/// messages to keep state synchronized with background operations.
+/// </summary>
 public class SettingsUi : WindowMediatorSubscriberBase
 {
     private readonly ApiController _apiController;
