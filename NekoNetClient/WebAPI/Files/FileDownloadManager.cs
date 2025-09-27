@@ -17,11 +17,18 @@ using NekoNetClient.WebAPI.Files.Models;
 using System.Net;
 using System.Net.Http.Json;
 using System.Linq;
+using System.Collections.Concurrent;
 
 namespace NekoNetClient.WebAPI.Files;
 
 public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 {
+    // Unified buffer sizes for download operations. Larger buffers reduce syscall overhead
+    // and improve sustained throughput at the cost of a small increase in per-slot memory.
+    private const int LargeBufferSize = 262_144; // 256 KB
+    private const int MediumBufferSize = 65_536; // 64 KB
+    private const int SmallBufferSize = 8_192;   // 8 KB (fallback, rarely used)
+
     private readonly Dictionary<string, FileDownloadStatus> _downloadStatus;
     private readonly FileCompactor _fileCompactor;
     private readonly int? _serverIndex;
@@ -30,6 +37,37 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     private readonly FileTransferOrchestrator _orchestrator;
     private readonly ServerConfigurationManager _serverConfigurationManager;
     private readonly List<ThrottledStream> _activeDownloadStreams;
+    // Short-lived cache to coalesce duplicate getFileSizes calls that occur within a tight window
+    private static readonly ConcurrentDictionary<string, (DateTime Timestamp, List<DownloadFileDto> Result)> _getSizesCache = new();
+    // In-flight coalescing for getFileSizes to dedupe concurrent calls (avoids duplicate queueing/logs)
+    private static readonly ConcurrentDictionary<string, Lazy<Task<List<DownloadFileDto>>>> _getSizesInFlight = new();
+    
+    // Reusable HttpClient for PlayerSync direct downloads to leverage connection pooling and avoid socket churn
+    private static readonly HttpClient PlayerSyncHttpClient = CreatePlayerSyncHttpClient();
+
+    private static HttpClient CreatePlayerSyncHttpClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+            MaxConnectionsPerServer = 8,
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always,
+            KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(15),
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            UseCookies = false,
+            Expect100ContinueTimeout = TimeSpan.Zero
+        };
+
+        var client = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromMinutes(5)
+        };
+        client.DefaultRequestHeaders.ConnectionClose = false;
+        client.DefaultRequestHeaders.ExpectContinue = false;
+        return client;
+    }
 
     private string GetServerLabel() => (_serviceApiBase ?? _orchestrator.FilesCdnUri?.ToString() ?? string.Empty).ToServerLabel();
 
@@ -88,6 +126,21 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         for (int i = 0; i < buffer.Length; ++i)
         {
             buffer[i] ^= 42;
+        }
+    }
+
+    private string BuildGetSizesCacheKey(IEnumerable<string> hashes)
+    {
+        try
+        {
+            // Key combines server label and a stable, order-independent hash list signature
+            var server = GetServerLabel();
+            var key = string.Join(',', (hashes ?? Array.Empty<string>()).OrderBy(h => h, StringComparer.Ordinal));
+            return server + "|" + key;
+        }
+        catch
+        {
+            return Guid.NewGuid().ToString("N");
         }
     }
 
@@ -206,7 +259,8 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             var fileStream = File.Create(tempPath);
             await using (fileStream.ConfigureAwait(false))
             {
-                var bufferSize = response.Content.Headers.ContentLength > 1024 * 1024 ? 65536 : 8196;
+                // Prefer a larger buffer for files > 1MB to increase throughput.
+                var bufferSize = response.Content.Headers.ContentLength > 1024 * 1024 ? LargeBufferSize : MediumBufferSize;
                 var buffer = new byte[bufferSize];
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 long lastReportBytes = 0;
@@ -553,6 +607,34 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
     private async Task<List<DownloadFileDto>> FilesGetSizes(List<string> hashes, CancellationToken ct)
     {
+        // Coalesce duplicate requests within 5 seconds (result cache) and also de-dup concurrent requests (in-flight cache)
+        var cacheKey = BuildGetSizesCacheKey(hashes ?? []);
+        if (_getSizesCache.TryGetValue(cacheKey, out var cached) && (DateTime.UtcNow - cached.Timestamp) <= TimeSpan.FromSeconds(5))
+        {
+            try { PublishDownloadEvent(EventSeverity.Informational, $"Using cached file sizes for {hashes?.Count ?? 0} files (<=5s)"); } catch { }
+            return cached.Result;
+        }
+
+        // In-flight coalescing: ensure only one network call executes per unique (server+hashes) at a time
+        Lazy<Task<List<DownloadFileDto>>> lazy = _getSizesInFlight.GetOrAdd(cacheKey,
+            _ => new Lazy<Task<List<DownloadFileDto>>>(
+                () => FilesGetSizesCore(hashes ?? [], ct),
+                System.Threading.LazyThreadSafetyMode.ExecutionAndPublication));
+
+        try
+        {
+            var result = await lazy.Value.ConfigureAwait(false);
+            return result;
+        }
+        finally
+        {
+            // Remove the in-flight entry after completion so future calls can refresh or use short-lived cache
+            _getSizesInFlight.TryRemove(cacheKey, out _);
+        }
+    }
+
+    private async Task<List<DownloadFileDto>> FilesGetSizesCore(List<string> hashes, CancellationToken ct)
+    {
         Uri? baseCdn = null;
         string source = "unknown";
 
@@ -639,6 +721,9 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     RawSize = 0
                 });
             }
+            // Store short-lived cache entry to keep subsequent calls from repeating immediately
+            var ck = BuildGetSizesCacheKey(hashes ?? []);
+            _getSizesCache[ck] = (DateTime.UtcNow, fallbackResults);
             return fallbackResults;
         }
         catch (Exception ex)
@@ -741,6 +826,8 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                         RawSize = 0
                     });
                 }
+                var ck2 = BuildGetSizesCacheKey(hashes ?? []);
+                _getSizesCache[ck2] = (DateTime.UtcNow, fallbackResults);
                 return fallbackResults;
             }
             
@@ -763,6 +850,15 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             foreach (var d in payload)
             {
                 d.Url = baseText; // base only; paths are appended by MareFiles helpers
+            }
+            // Store short-lived cache entry
+            var cacheKey = BuildGetSizesCacheKey(hashes ?? []);
+            _getSizesCache[cacheKey] = (DateTime.UtcNow, payload);
+            // Opportunistically purge old entries to keep dict small
+            foreach (var kvp in _getSizesCache.ToArray())
+            {
+                if ((DateTime.UtcNow - kvp.Value.Timestamp) > TimeSpan.FromSeconds(30))
+                    _getSizesCache.TryRemove(kvp.Key, out _);
             }
             return payload;
         }
@@ -943,9 +1039,8 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 {
                     Logger.LogDebug("Downloading PlayerSync file {hash} from {url}", file.Hash, dft.DirectDownloadUri);
 
-                    // Use HttpClient directly for PlayerSync CDN downloads (no Mare auth needed)
-                    using var httpClient = new HttpClient();
-                    httpClient.Timeout = TimeSpan.FromMinutes(5);
+                    // Use a tuned, shared HttpClient for PlayerSync CDN downloads (no Mare auth needed)
+                    var httpClient = PlayerSyncHttpClient;
 
                     // PlayerSync returns compressed bytes (LZ4-wrapped) similar to CDN blocks; download to temp then decompress to final
                     var tempPath = _fileDbManager.GetCacheFilePath(file.Hash, "bin");
@@ -968,7 +1063,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                                 var input = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
                                 stream = new ThrottledStream(input, limit);
                                 _activeDownloadStreams.Add(stream);
-                                var buffer = new byte[65536];
+                                var buffer = new byte[LargeBufferSize];
                                 var sw = System.Diagnostics.Stopwatch.StartNew();
                                 long last = 0;
                                 int read;
@@ -1005,7 +1100,10 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                         catch (Exception ex) when (attempts < 3 && (ex is HttpRequestException || ex is IOException || ex is TaskCanceledException))
                         {
                             Logger.LogWarning(ex, "Retrying PlayerSync direct download for {hash}, attempt {attempt}", file.Hash, attempts);
-                            await Task.Delay(TimeSpan.FromMilliseconds(200 * attempts), token).ConfigureAwait(false);
+                            // Exponential backoff with a touch of jitter
+                            var delayMs = 200 * (int)Math.Pow(2, attempts - 1);
+                            delayMs += Random.Shared.Next(0, 100);
+                            await Task.Delay(TimeSpan.FromMilliseconds(delayMs), token).ConfigureAwait(false);
                             continue;
                         }
                         finally
@@ -1021,8 +1119,17 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 }
                 catch (Exception ex)
                 {
-                    Logger.LogError(ex, "Failed to download PlayerSync file {hash} from {url}", file.Hash, dft.DirectDownloadUri);
-                    PublishDownloadEvent(EventSeverity.Error, $"Failed to download PlayerSync file {file.Hash}", uri: dft.DirectDownloadUri, ex: ex);
+                    if (ex is TaskCanceledException && token.IsCancellationRequested)
+                    {
+                        // Cancellation due to token is expected during disconnects or visibility changes; log at info to reduce noise
+                        Logger.LogInformation("PlayerSync download canceled for {hash} due to operation cancellation", file.Hash);
+                        PublishDownloadEvent(EventSeverity.Warning, $"PlayerSync download canceled for {file.Hash}", uri: dft.DirectDownloadUri);
+                    }
+                    else
+                    {
+                        Logger.LogError(ex, "Failed to download PlayerSync file {hash} from {url}", file.Hash, dft.DirectDownloadUri);
+                        PublishDownloadEvent(EventSeverity.Error, $"Failed to download PlayerSync file {file.Hash}", uri: dft.DirectDownloadUri, ex: ex);
+                    }
                 }
             }
 
@@ -1127,7 +1234,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                         {
                             stream = new ThrottledStream(input, limit);
                             _activeDownloadStreams.Add(stream);
-                            var buffer = new byte[65536];
+                            var buffer = new byte[LargeBufferSize];
                             var sw = System.Diagnostics.Stopwatch.StartNew();
                             long last = 0;
                             int read;
@@ -1203,7 +1310,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                                 var limit = _orchestrator.DownloadLimitPerSlot();
                                 stream = new ThrottledStream(input, limit);
                                 _activeDownloadStreams.Add(stream);
-                                var buffer = new byte[65536];
+                                var buffer = new byte[LargeBufferSize];
                                 int read;
                                 long total = 0;
                                 while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false)) > 0)

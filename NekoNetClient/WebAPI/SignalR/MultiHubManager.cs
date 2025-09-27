@@ -41,6 +41,8 @@ namespace NekoNetClient.WebAPI.SignalR
         private readonly ConcurrentDictionary<SyncService, string> _lastError = new();
         private readonly ConcurrentDictionary<SyncService, Uri> _svcCdn = new();
         private readonly ConcurrentDictionary<SyncService, DateTime> _svcLastPush = new();
+    // Per-service connection gates to avoid concurrent connect/disconnect races and duplicate hubs
+    private readonly ConcurrentDictionary<SyncService, SemaphoreSlim> _svcGates = new();
 
         // Per-configured-server dictionaries (true multi-server)
         private readonly ConcurrentDictionary<int, HubConnection> _cfgHubs = new();
@@ -49,6 +51,8 @@ namespace NekoNetClient.WebAPI.SignalR
         private readonly ConcurrentDictionary<int, string> _cfgLastError = new();
         private readonly ConcurrentDictionary<int, Uri> _cfgCdn = new();
         private readonly ConcurrentDictionary<int, DateTime> _cfgLastPush = new();
+    // Per-configured-server connection gates
+    private readonly ConcurrentDictionary<int, SemaphoreSlim> _cfgGates = new();
 
         private sealed record ServiceSpec(string Endpoint, bool UseMareToken, bool WebSocketsOnly);
         private static readonly Dictionary<SyncService, ServiceSpec> ServiceMap = new()
@@ -252,65 +256,85 @@ namespace NekoNetClient.WebAPI.SignalR
 
         public async Task DisconnectAsync(SyncService svc)
         {
-            if (_hubs.TryGetValue(svc, out var hub))
+            var gate = _svcGates.GetOrAdd(svc, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync().ConfigureAwait(false);
+            try
             {
-                try
+                if (_hubs.TryGetValue(svc, out var hub))
                 {
-                    Mediator.Publish(new EventMessage(new Event(nameof(MultiHubManager), EventSeverity.Informational,
-                        $"Disconnecting service {svc}") { Server = GetServiceApiBase(svc).ToServerLabel() }));
-                }
-                catch { }
-                try { await hub.StopAsync().ConfigureAwait(false); } catch { }
-            }
-            _hubs.TryRemove(svc, out _);
-            _lastError.TryRemove(svc, out _);
-            _svcSystemInfo.TryRemove(svc, out _);
-            if (_svcPairManagers.TryGetValue(svc, out var pm))
-            {
-                // Only remove users that are not present on other services
-                var key = GetServiceApiBase(svc);
-                pm.SelectiveClear(ud =>
-                {
-                    _rolling.Offline(ud.UID, key);
-                    var remove = !_rolling.IsOnlineElsewhere(ud.UID, key);
-                    if (remove)
+                    try
                     {
-                        try { pm.MarkPairOffline(ud); } catch { }
+                        Mediator.Publish(new EventMessage(new Event(nameof(MultiHubManager), EventSeverity.Informational,
+                            $"Disconnecting service {svc}") { Server = GetServiceApiBase(svc).ToServerLabel() }));
                     }
-                    return remove;
-                });
+                    catch { }
+                    try { await hub.StopAsync().ConfigureAwait(false); } catch { }
+                    try { await hub.DisposeAsync().ConfigureAwait(false); } catch { }
+                }
+                _hubs.TryRemove(svc, out _);
+                _lastError.TryRemove(svc, out _);
+                _svcSystemInfo.TryRemove(svc, out _);
+                if (_svcPairManagers.TryGetValue(svc, out var pm))
+                {
+                    // Only remove users that are not present on other services
+                    var key = GetServiceApiBase(svc);
+                    pm.SelectiveClear(ud =>
+                    {
+                        _rolling.Offline(ud.UID, key);
+                        var remove = !_rolling.IsOnlineElsewhere(ud.UID, key);
+                        if (remove)
+                        {
+                            try { pm.MarkPairOffline(ud); } catch { }
+                        }
+                        return remove;
+                    });
+                }
+            }
+            finally
+            {
+                gate.Release();
             }
         }
 
         public async Task DisconnectConfiguredAsync(int serverIndex)
         {
-            if (_cfgHubs.TryGetValue(serverIndex, out var hub))
+            var gate = _cfgGates.GetOrAdd(serverIndex, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync().ConfigureAwait(false);
+            try
             {
-                try
+                if (_cfgHubs.TryGetValue(serverIndex, out var hub))
                 {
-                    var s = _servers.GetServerByIndex(serverIndex);
-                    Mediator.Publish(new EventMessage(new Event(nameof(MultiHubManager), EventSeverity.Informational,
-                        $"Disconnecting configured server #{serverIndex}") { Server = s.ServerUri.ToServerLabel() }));
-                }
-                catch { }
-                try { await hub.StopAsync().ConfigureAwait(false); } catch { }
-            }
-            _cfgHubs.TryRemove(serverIndex, out _);
-            _cfgLastError.TryRemove(serverIndex, out _);
-            _cfgSystemInfo.TryRemove(serverIndex, out _);
-            if (_cfgPairManagers.TryGetValue(serverIndex, out var pm))
-            {
-                var key = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
-                pm.SelectiveClear(ud =>
-                {
-                    _rolling.Offline(ud.UID, key);
-                    var remove = !_rolling.IsOnlineElsewhere(ud.UID, key);
-                    if (remove)
+                    try
                     {
-                        try { pm.MarkPairOffline(ud); } catch { }
+                        var s = _servers.GetServerByIndex(serverIndex);
+                        Mediator.Publish(new EventMessage(new Event(nameof(MultiHubManager), EventSeverity.Informational,
+                            $"Disconnecting configured server #{serverIndex}") { Server = s.ServerUri.ToServerLabel() }));
                     }
-                    return remove;
-                });
+                    catch { }
+                    try { await hub.StopAsync().ConfigureAwait(false); } catch { }
+                    try { await hub.DisposeAsync().ConfigureAwait(false); } catch { }
+                }
+                _cfgHubs.TryRemove(serverIndex, out _);
+                _cfgLastError.TryRemove(serverIndex, out _);
+                _cfgSystemInfo.TryRemove(serverIndex, out _);
+                if (_cfgPairManagers.TryGetValue(serverIndex, out var pm))
+                {
+                    var key = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
+                    pm.SelectiveClear(ud =>
+                    {
+                        _rolling.Offline(ud.UID, key);
+                        var remove = !_rolling.IsOnlineElsewhere(ud.UID, key);
+                        if (remove)
+                        {
+                            try { pm.MarkPairOffline(ud); } catch { }
+                        }
+                        return remove;
+                    });
+                }
+            }
+            finally
+            {
+                gate.Release();
             }
         }
 
@@ -319,55 +343,97 @@ namespace NekoNetClient.WebAPI.SignalR
 
         public async Task ConnectAsync(SyncService svc)
         {
-            var hub = await BuildHubAsync(svc, CancellationToken.None).ConfigureAwait(false);
-            await hub.StartAsync().ConfigureAwait(false);
-            _hubs[svc] = hub;
-            await PostConnectBootstrapAsync(svc, hub).ConfigureAwait(false);
+            var gate = _svcGates.GetOrAdd(svc, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync().ConfigureAwait(false);
             try
             {
-                var conn = await GetConnectionInfoAsync(svc, CancellationToken.None).ConfigureAwait(false);
-                if (conn != null)
+                if (_hubs.TryGetValue(svc, out var existing))
                 {
-                    if (conn.ServerInfo?.FileServerAddress != null)
+                    if (existing.State is HubConnectionState.Connected or HubConnectionState.Connecting or HubConnectionState.Reconnecting)
                     {
-                        _svcCdn[svc] = conn.ServerInfo.FileServerAddress;
-                        _log.LogDebug("[Service {svc}] CDN set to {cdn}", svc, conn.ServerInfo.FileServerAddress);
+                        _log.LogDebug("[Service {svc}] ConnectAsync requested but hub is already {state}", svc, existing.State);
+                        return;
                     }
-                    else
-                    {
-                        _log.LogDebug("[Service {svc}] No CDN provided in ConnectionDto; proceeding without explicit CDN", svc);
-                    }
-                    Mediator.Publish(new ServiceConnectedMessage(svc, conn, GetServiceApiBase(svc)));
+                    try { await existing.StopAsync().ConfigureAwait(false); } catch { }
+                    try { await existing.DisposeAsync().ConfigureAwait(false); } catch { }
+                    _hubs.TryRemove(svc, out _);
                 }
+
+                var hub = await BuildHubAsync(svc, CancellationToken.None).ConfigureAwait(false);
+                await hub.StartAsync().ConfigureAwait(false);
+                _hubs[svc] = hub;
+                await PostConnectBootstrapAsync(svc, hub).ConfigureAwait(false);
+                try
+                {
+                    var conn = await GetConnectionInfoAsync(svc, CancellationToken.None).ConfigureAwait(false);
+                    if (conn != null)
+                    {
+                        if (conn.ServerInfo?.FileServerAddress != null)
+                        {
+                            _svcCdn[svc] = conn.ServerInfo.FileServerAddress;
+                            _log.LogDebug("[Service {svc}] CDN set to {cdn}", svc, conn.ServerInfo.FileServerAddress);
+                        }
+                        else
+                        {
+                            _log.LogDebug("[Service {svc}] No CDN provided in ConnectionDto; proceeding without explicit CDN", svc);
+                        }
+                        Mediator.Publish(new ServiceConnectedMessage(svc, conn, GetServiceApiBase(svc)));
+                    }
+                }
+                catch { }
             }
-            catch { }
+            finally
+            {
+                gate.Release();
+            }
         }
 
         public async Task ConnectConfiguredAsync(int serverIndex)
         {
-            var hub = await BuildConfiguredHubAsync(serverIndex, CancellationToken.None).ConfigureAwait(false);
-            await hub.StartAsync().ConfigureAwait(false);
-            _cfgHubs[serverIndex] = hub;
-            await PostConnectBootstrapConfiguredAsync(serverIndex, hub).ConfigureAwait(false);
-            // Get ConnectionDto to obtain FileServerAddress for this configured server
+            var gate = _cfgGates.GetOrAdd(serverIndex, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync().ConfigureAwait(false);
             try
             {
-                var conn = await GetConfiguredConnectionInfoAsync(serverIndex, CancellationToken.None).ConfigureAwait(false);
-                if (conn != null)
+                if (_cfgHubs.TryGetValue(serverIndex, out var existing))
                 {
-                    if (conn.ServerInfo?.FileServerAddress != null)
+                    if (existing.State is HubConnectionState.Connected or HubConnectionState.Connecting or HubConnectionState.Reconnecting)
                     {
-                        _cfgCdn[serverIndex] = conn.ServerInfo.FileServerAddress;
-                        _log.LogDebug("[Configured #{idx}] CDN set to {cdn}", serverIndex, conn.ServerInfo.FileServerAddress);
+                        _log.LogDebug("[Configured #{idx}] ConnectAsync requested but hub is already {state}", serverIndex, existing.State);
+                        return;
                     }
-                    else
-                    {
-                        _log.LogDebug("[Configured #{idx}] No CDN provided in ConnectionDto; proceeding without explicit CDN", serverIndex);
-                    }
-                    Mediator.Publish(new ConfiguredConnectedMessage(serverIndex, conn));
+                    try { await existing.StopAsync().ConfigureAwait(false); } catch { }
+                    try { await existing.DisposeAsync().ConfigureAwait(false); } catch { }
+                    _cfgHubs.TryRemove(serverIndex, out _);
                 }
+
+                var hub = await BuildConfiguredHubAsync(serverIndex, CancellationToken.None).ConfigureAwait(false);
+                await hub.StartAsync().ConfigureAwait(false);
+                _cfgHubs[serverIndex] = hub;
+                await PostConnectBootstrapConfiguredAsync(serverIndex, hub).ConfigureAwait(false);
+                // Get ConnectionDto to obtain FileServerAddress for this configured server
+                try
+                {
+                    var conn = await GetConfiguredConnectionInfoAsync(serverIndex, CancellationToken.None).ConfigureAwait(false);
+                    if (conn != null)
+                    {
+                        if (conn.ServerInfo?.FileServerAddress != null)
+                        {
+                            _cfgCdn[serverIndex] = conn.ServerInfo.FileServerAddress;
+                            _log.LogDebug("[Configured #{idx}] CDN set to {cdn}", serverIndex, conn.ServerInfo.FileServerAddress);
+                        }
+                        else
+                        {
+                            _log.LogDebug("[Configured #{idx}] No CDN provided in ConnectionDto; proceeding without explicit CDN", serverIndex);
+                        }
+                        Mediator.Publish(new ConfiguredConnectedMessage(serverIndex, conn));
+                    }
+                }
+                catch { }
             }
-            catch { }
+            finally
+            {
+                gate.Release();
+            }
         }
 
         public async Task PushCharacterDataAsync(SyncService svc, CharacterData data, List<UserData> recipients, CensusDataDto? census = null)
@@ -414,9 +480,9 @@ namespace NekoNetClient.WebAPI.SignalR
 
             RegisterMareEventHandlers(svc, hub);
 
-            hub.Closed += ex => { if (ex != null) _lastError[svc] = ex.Message; return Task.CompletedTask; };
-            hub.Reconnecting += ex => { if (ex != null) _lastError[svc] = ex.Message; return Task.CompletedTask; };
-            hub.Reconnected += id => { _lastError.TryRemove(svc, out _); return Task.CompletedTask; };
+            hub.Closed += ex => { _log.LogDebug("[Service {svc}] Closed: {msg}", svc, ex?.Message); if (ex != null) _lastError[svc] = ex.Message; return Task.CompletedTask; };
+            hub.Reconnecting += ex => { _log.LogDebug("[Service {svc}] Reconnecting: {msg}", svc, ex?.Message); if (ex != null) _lastError[svc] = ex.Message; return Task.CompletedTask; };
+            hub.Reconnected += id => { _log.LogDebug("[Service {svc}] Reconnected: {id}", svc, id); _lastError.TryRemove(svc, out _); return Task.CompletedTask; };
 
             return hub;
         }
@@ -439,9 +505,9 @@ namespace NekoNetClient.WebAPI.SignalR
             hub.On<SystemInfoDto>("Client_UpdateSystemInfo", dto => { _cfgSystemInfo[serverIndex] = dto; });
             RegisterMareEventHandlersConfigured(serverIndex, hub);
 
-            hub.Closed += ex => { if (ex != null) _cfgLastError[serverIndex] = ex.Message; return Task.CompletedTask; };
-            hub.Reconnecting += ex => { if (ex != null) _cfgLastError[serverIndex] = ex.Message; return Task.CompletedTask; };
-            hub.Reconnected += id => { _cfgLastError.TryRemove(serverIndex, out _); return Task.CompletedTask; };
+            hub.Closed += ex => { _log.LogDebug("[Configured #{idx}] Closed: {msg}", serverIndex, ex?.Message); if (ex != null) _cfgLastError[serverIndex] = ex.Message; return Task.CompletedTask; };
+            hub.Reconnecting += ex => { _log.LogDebug("[Configured #{idx}] Reconnecting: {msg}", serverIndex, ex?.Message); if (ex != null) _cfgLastError[serverIndex] = ex.Message; return Task.CompletedTask; };
+            hub.Reconnected += id => { _log.LogDebug("[Configured #{idx}] Reconnected: {id}", serverIndex, id); _cfgLastError.TryRemove(serverIndex, out _); return Task.CompletedTask; };
 
             return hub;
         }

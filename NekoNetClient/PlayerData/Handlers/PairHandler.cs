@@ -45,6 +45,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     private bool _isVisible;
     private Guid _penumbraCollection;
     private bool _redrawOnNextApplication = false;
+    // In-flight guard per pair to avoid duplicate apply/download pipelines. Stores last start time.
+    private DateTime _lastPipelineStartUtc = DateTime.MinValue;
 
     public PairHandler(ILogger<PairHandler> logger, Pair pair,
         GameObjectHandlerFactory gameObjectHandlerFactory,
@@ -137,6 +139,15 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
     public void ApplyCharacterData(Guid applicationBase, CharacterData characterData, bool forceApplyCustomization = false)
     {
+        // Dedupe fast repeat triggers (e.g., double events on service/cross) within 750ms window
+        var now = DateTime.UtcNow;
+        if ((now - _lastPipelineStartUtc) < TimeSpan.FromMilliseconds(750))
+        {
+            Logger.LogTrace("[BASE-{appbase}] Skipping duplicate ApplyCharacterData trigger (within 750ms)", applicationBase);
+            return;
+        }
+        _lastPipelineStartUtc = now;
+
         if (_dalamudUtil.IsInCombatOrPerforming)
         {
             Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Warning,
@@ -614,8 +625,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         {
             IsVisible = false;
             _charaHandler.Invalidate();
-            _downloadCancellationTokenSource?.CancelDispose();
-            _downloadCancellationTokenSource = null;
+            // Do NOT cancel downloads on transient visibility loss.
+            // Keeping ongoing downloads allows reuse of freshly fetched files if the player reappears shortly,
+            // and avoids TaskCanceledException storms during high churn.
+            // Cancellation still occurs on zone switches or explicit disposals where teardown is required.
             Logger.LogTrace("{this} visibility changed, now: {visi}", this, IsVisible);
         }
     }

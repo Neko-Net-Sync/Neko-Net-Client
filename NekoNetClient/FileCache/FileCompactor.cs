@@ -80,7 +80,67 @@ public sealed class FileCompactor
 
     public async Task WriteAllBytesAsync(string filePath, byte[] decompressedFile, CancellationToken token)
     {
-        await File.WriteAllBytesAsync(filePath, decompressedFile, token).ConfigureAwait(false);
+        // Write to a temp file first, then atomically replace the destination with retries.
+        // This mitigates sharing violations when the game or another process briefly holds the file open.
+        var dir = Path.GetDirectoryName(filePath)!;
+        Directory.CreateDirectory(dir);
+        var tempPath = filePath + ".part";
+
+        // Ensure no stale temp remains
+        try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+
+        await File.WriteAllBytesAsync(tempPath, decompressedFile, token).ConfigureAwait(false);
+
+        const int maxAttempts = 12; // ~12 attempts over ~10s total backoff
+        int attempt = 0;
+        int delayMs = 150;
+        Exception? lastError = null;
+        while (attempt++ < maxAttempts)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                // Prefer atomic replace if destination exists, otherwise move
+                if (File.Exists(filePath))
+                {
+                    // File.Replace will fail if the destination is in use; retry in that case
+                    File.Replace(tempPath, filePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    // .NET 8: overwrite=false since dest does not exist
+                    File.Move(tempPath, filePath, overwrite: false);
+                }
+                lastError = null;
+                break;
+            }
+            catch (IOException ex)
+            {
+                // Sharing violation or other transient IO condition – keep retrying
+                lastError = ex;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // Can occur during anti-virus scan or transient ACL/lock – retry a few times
+                lastError = ex;
+            }
+
+            await Task.Delay(delayMs, token).ConfigureAwait(false);
+            // Exponential backoff with a cap
+            delayMs = Math.Min(delayMs * 2, 1500);
+        }
+
+        // Best-effort cleanup of temp file if replacement succeeded
+        if (lastError == null)
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+        }
+        else
+        {
+            // We failed to move/replace – surface a clear error and keep temp for troubleshooting
+            _logger.LogWarning(lastError, "Could not replace destination file after retries: {dest}. Leaving temp file: {temp}", filePath, tempPath);
+            throw lastError;
+        }
 
         if (_dalamudUtilService.IsWine || !_mareConfigService.Current.UseCompactor)
         {
