@@ -1,3 +1,24 @@
+/*
+     Neko-Net Client — PlayerData.Handlers.PairHandler
+     --------------------------------------------------
+     Purpose
+     - Orchestrates the end-to-end pipeline for a single pair: from character data updates to downloading
+         required files and applying them in-game through IPC with Penumbra, Glamourer, and related plugins.
+
+     Core responsibilities
+     - Visibility tracking: toggles visible state and publishes UI events; triggers reapply on return.
+     - Download pipeline: computes missing files, verifies local cache vs server raw sizes when appropriate,
+         and performs multi-CDN aware downloads through FileDownloadManager.
+     - Apply pipeline: assigns temporary collections, sets manipulations/mod paths, and applies customization
+         across all object kinds (player, pet, minion/mount, companion), with robust cancellation and redraws.
+     - IPC coordination: wraps calls to Penumbra, Glamourer, Customize+, Honorific, Heels, Moodles, and PetNames.
+     - Zoning/cutscene handling: cancels or defers work safely during combat, performances, zoning, GPose or cutscenes.
+
+     Concurrency and stability
+     - Deduplicates rapid ApplyCharacterData triggers and prevents mid-apply permission flips by marking the Pair busy.
+     - Separates download and apply cancellation tokens and blocks overlapping applications for the same pair.
+     - Defers cleanup/redraw work asynchronously during disposal to avoid blocking the game render thread.
+*/
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
@@ -20,6 +41,10 @@ using ObjectKind = NekoNet.API.Data.Enum.ObjectKind;
 
 namespace NekoNetClient.PlayerData.Handlers;
 
+/// <summary>
+/// Handles download and application of character data for a specific <see cref="Pairs.Pair"/>.
+/// Tracks visibility, integrates with IPC providers, and coordinates safe application across gameplay states.
+/// </summary>
 public sealed class PairHandler : DisposableMediatorSubscriberBase
 {
     private sealed record CombatData(Guid ApplicationId, CharacterData CharacterData, bool Forced);
@@ -112,6 +137,9 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         LastAppliedDataBytes = -1;
     }
 
+    /// <summary>
+    /// Whether the paired character is currently visible. Setting this publishes UI events and server labels.
+    /// </summary>
     public bool IsVisible
     {
         get => _isVisible;
@@ -137,6 +165,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     public string? PlayerName { get; private set; }
     public string PlayerNameHash => Pair.Ident;
 
+    /// <summary>
+    /// Entry point for applying character data. Handles gameplay state checks (combat, cutscene, GPose),
+    /// dedupes fast repeat triggers, and kicks off download/apply pipelines as needed.
+    /// </summary>
     public void ApplyCharacterData(Guid applicationBase, CharacterData characterData, bool forceApplyCustomization = false)
     {
         // Dedupe fast repeat triggers (e.g., double events on service/cross) within 750ms window
@@ -234,6 +266,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Disposes the handler and performs deferred cleanup to restore the player's original state.
+    /// Heavy IPC calls are offloaded to background tasks to minimize impact on rendering.
+    /// </summary>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
@@ -347,6 +383,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Applies customization data for a specific object kind by dispatching to the relevant IPC services.
+    /// Includes Glamourer, Customize+, Heels, Honorific, Moodles, PetNames, and forced redraws.
+    /// </summary>
     private async Task ApplyCustomizationDataAsync(Guid applicationId, KeyValuePair<ObjectKind, HashSet<PlayerChanges>> changes, CharacterData charaData, CancellationToken token)
     {
         if (PlayerCharacter == nint.Zero) return;
@@ -427,6 +467,9 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Computes whether downloads are required and triggers the async download/apply flow.
+    /// </summary>
     private void DownloadAndApplyCharacter(Guid applicationBase, CharacterData charaData, Dictionary<ObjectKind, HashSet<PlayerChanges>> updatedData)
     {
         if (!updatedData.Any())
@@ -446,6 +489,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
     private Task? _pairDownloadTask;
 
+    /// <summary>
+    /// Performs the download of missing assets (with integrity checks) and schedules the application task.
+    /// Blocks overlapping applications and respects cancellation during zoning/combat.
+    /// </summary>
     private async Task DownloadAndApplyCharacterAsync(Guid applicationBase, CharacterData charaData, Dictionary<ObjectKind, HashSet<PlayerChanges>> updatedData,
         bool updateModdedPaths, bool updateManip, CancellationToken downloadToken)
     {
@@ -520,6 +567,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         _applicationTask = ApplyCharacterDataAsync(applicationBase, charaData, updatedData, updateModdedPaths, updateManip, moddedPaths, token);
     }
 
+    /// <summary>
+    /// Applies the prepared character data: assigns temporary collection, sets mods and manipulations,
+    /// and applies customization per object kind while waiting for safe draw windows.
+    /// </summary>
     private async Task ApplyCharacterDataAsync(Guid applicationBase, CharacterData charaData, Dictionary<ObjectKind, HashSet<PlayerChanges>> updatedData, bool updateModdedPaths, bool updateManip,
         Dictionary<(string GamePath, string? Hash), string> moddedPaths, CancellationToken token)
     {
@@ -589,6 +640,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Periodic update tied to the framework. Resolves initial name/ident, manages visibility transitions,
+    /// and triggers reapplication on return to visibility.
+    /// </summary>
     private void FrameworkUpdate()
     {
         if (string.IsNullOrEmpty(PlayerName))
@@ -633,6 +688,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Initializes the handler by resolving the game object by ident first, then falling back to name.
+    /// Also subscribes to plugin-ready messages to reapply persisted cosmetic state.
+    /// </summary>
     private void Initialize(string name)
     {
         Logger.LogTrace("Initializing PairHandler for {alias}; name={name}, ident={ident}", Pair.UserData.AliasOrUID, name, Pair.Ident);
@@ -672,6 +731,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, _charaHandler.GetGameObject()!.ObjectIndex).GetAwaiter().GetResult();
     }
 
+    /// <summary>
+    /// Reverts customization data for a specific object kind using IPC. Uses a strict name check to avoid
+    /// reverting the wrong target and ensures a redraw to visually reset state.
+    /// </summary>
     private async Task RevertCustomizationDataAsync(ObjectKind objectKind, string name, string ident, Guid applicationId, CancellationToken cancelToken)
     {
         nint address = _dalamudUtil.GetPlayerCharacterFromCachedTableByIdent(ident);
@@ -755,6 +818,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Calculates the mapping of game paths to local files, verifies cache integrity against server-provided
+    /// sizes (unless PlayerSync direct-downloads are in use), and returns the list of missing files to download.
+    /// </summary>
     private List<FileReplacementData> TryCalculateModdedDictionary(Guid applicationBase, CharacterData charaData, out Dictionary<(string GamePath, string? Hash), string> moddedDictionary, CancellationToken token)
     {
         Stopwatch st = Stopwatch.StartNew();

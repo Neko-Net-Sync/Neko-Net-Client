@@ -1,3 +1,17 @@
+/*
+   File: FileTransferOrchestrator.cs
+   Role: Central coordinator for file transfers. Manages per-host concurrency slots, maps CDN/API hosts to server indices
+         for token routing, normalizes API bases, and sends authenticated HTTP requests. Publishes mediator events for
+         wait-state changes and handles DownloadReady signaling from hubs.
+
+   Cross-service aspects:
+   - Maintains mappings from service API base and configured connections to CDN hosts so that REST calls (sizes, enqueue,
+     cancel) carry the correct bearer token for the target service.
+   - Supports environments with no explicit CDN by falling back to the API base host for requests, still mapping auth.
+
+   Error handling:
+   - Logs and rethrows HTTP exceptions; distinguishes TaskCanceled paths. Avoids throwing on benign mapping failures.
+*/
 using System;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.MareConfiguration;
@@ -12,6 +26,10 @@ using System.Reflection;
 
 namespace NekoNetClient.WebAPI.Files;
 
+/// <summary>
+/// Coordinates HTTP traffic for file transfers across services and CDNs, including authentication routing,
+/// concurrency throttling, and mediator signaling.
+/// </summary>
 public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
 {
     private readonly ConcurrentDictionary<Guid, bool> _downloadReady = new();
@@ -27,6 +45,9 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
     private SemaphoreSlim _downloadSemaphore;
     private int CurrentlyUsedDownloadSlots => _availableDownloadSlots - _downloadSemaphore.CurrentCount;
 
+    /// <summary>
+    /// Creates a new orchestrator and wires mediator subscriptions for connection events and download readiness.
+    /// </summary>
     public FileTransferOrchestrator(ILogger<FileTransferOrchestrator> logger, MareConfigService mareConfig,
         MareMediator mediator, TokenProvider tokenProvider, HttpClient httpClient,
         ServerConfigurationManager servers) : base(logger, mediator)
@@ -121,9 +142,18 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         });
     }
 
+    /// <summary>
+    /// Gets the primary CDN address of the currently active connection, if any.
+    /// </summary>
     public Uri? FilesCdnUri { private set; get; }
+    /// <summary>
+    /// Resolves a CDN URI for the specified configured server index.
+    /// </summary>
     public Uri? GetFilesCdnUriForServerIndex(int serverIndex)
         => _cdnByServerIdx.TryGetValue(serverIndex, out var uri) ? uri : null;
+    /// <summary>
+    /// Resolves a CDN URI for the specified service API base, normalizing ws(s) schemes and falling back to the base itself.
+    /// </summary>
     public Uri? GetFilesCdnUriForApiBase(string apiBase)
     {
         var key = NormalizeApiBase(apiBase);
@@ -136,10 +166,20 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         }
         return null;
     }
+    /// <summary>
+    /// List of transfers that are forbidden by server policy.
+    /// </summary>
     public List<FileTransfer> ForbiddenTransfers { get; } = [];
+    /// <summary>
+    /// Indicates whether a CDN is known for the current session.
+    /// </summary>
     public bool IsInitialized => FilesCdnUri != null;
 
     // Register multiple CDN hosts for a given service API base to route tokens correctly
+    /// <summary>
+    /// Registers CDN hosts observed during a service-backed flow so subsequent requests can be routed with
+    /// the correct server token.
+    /// </summary>
     public void RegisterServiceHosts(string? serviceApiBase, IEnumerable<Uri> hosts)
     {
         var baseKey = NormalizeApiBase(serviceApiBase);
@@ -261,16 +301,7 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         var builder = new UriBuilder(uri);
         if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
         else if (string.Equals(builder.Scheme, "ws", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "http";
-        // Keep only scheme + authority for key matching
-        builder.Path = string.Empty;
-        builder.Query = null;
-        builder.Fragment = null;
-        // If port is default for scheme, let it be default
-        if ((string.Equals(builder.Scheme, "https", StringComparison.OrdinalIgnoreCase) && builder.Port == 443)
-            || (string.Equals(builder.Scheme, "http", StringComparison.OrdinalIgnoreCase) && builder.Port == 80))
-        {
-            builder.Port = -1;
-        }
+        builder.Port = -1;
         return builder.Uri.ToString().TrimEnd('/');
     }
 
@@ -285,15 +316,10 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
                 var key = requestMessage.RequestUri.IsDefaultPort
                     ? requestMessage.RequestUri.Host
                     : $"{requestMessage.RequestUri.Host}:{requestMessage.RequestUri.Port}";
-                Logger.LogTrace("Auth routing lookup for host key: {key}", key);
                 if (_serverIdxByHost.TryGetValue(key, out var idx))
                 {
                     Logger.LogDebug("Routing auth via server index {idx} for host {host}", idx, key);
                     token = await _tokenProvider.GetOrUpdateTokenForServer(idx, ct ?? CancellationToken.None).ConfigureAwait(false);
-                }
-                else
-                {
-                    Logger.LogTrace("No mapped server index for host key {key}; using default token", key);
                 }
             }
         }

@@ -1,4 +1,18 @@
-﻿using Microsoft.Extensions.Logging;
+﻿// Neko-Net Client – Transient Resource Manager
+// ----------------------------------------------------------------------------
+// Purpose
+//   Tracks game resource paths that are dynamically loaded at runtime (e.g., animations,
+//   effects, etc.) and classifies them as transient (session-only) or semi-transient
+//   (persisted by player/job to speed future loads). Integrates with Dalamud framework
+//   updates and Penumbra notifications to keep resource sets current.
+//
+// Highlights
+//   - Maintains per-object-kind sets of transient resources and optionally persists a
+//     curated subset (semi-transient) in configuration keyed by player + job.
+//   - Filters noisy paths and records during a user-triggered capturing session.
+//   - Notifies interested subsystems when sets change, with debounce to avoid spam.
+// ----------------------------------------------------------------------------
+using Microsoft.Extensions.Logging;
 using NekoNet.API.Data.Enum;
 using NekoNetClient.MareConfiguration;
 using NekoNetClient.MareConfiguration.Configurations;
@@ -11,6 +25,11 @@ using System.Collections.Concurrent;
 
 namespace NekoNetClient.FileCache;
 
+/// <summary>
+/// Observes resource load events and maintains sets of transient and semi-transient game paths separated by
+/// <see cref="ObjectKind"/>. Provides helpers to persist selected paths to configuration, record new paths during
+/// a capture window, and reconcile sets on framework updates or mod configuration changes.
+/// </summary>
 public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
 {
     private readonly object _cacheAdditionLock = new();
@@ -23,8 +42,15 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
     private ConcurrentDictionary<IntPtr, ObjectKind> _cachedFrameAddresses = [];
     private ConcurrentDictionary<ObjectKind, HashSet<string>>? _semiTransientResources = null;
     private uint _lastClassJobId = uint.MaxValue;
+    /// <summary>
+    /// Gets a value indicating whether the manager is currently capturing transient paths.
+    /// </summary>
     public bool IsTransientRecording { get; private set; } = false;
 
+    /// <summary>
+    /// Initializes a new instance and wires mediator subscriptions for resource load events,
+    /// Penumbra setting changes, and game object lifecycle notifications.
+    /// </summary>
     public TransientResourceManager(ILogger<TransientResourceManager> logger, TransientConfigService configurationService,
             DalamudUtilService dalamudUtil, MareMediator mediator) : base(logger, mediator)
     {
@@ -78,6 +104,10 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
     }
     private ConcurrentDictionary<ObjectKind, HashSet<string>> TransientResources { get; } = new();
 
+    /// <summary>
+    /// Removes paths from the semi-transient set either wholesale or based on a known replacement list.
+    /// Updates configuration as needed and logs the delta.
+    /// </summary>
     public void CleanUpSemiTransientResources(ObjectKind objectKind, List<FileReplacement>? fileReplacement = null)
     {
         if (!SemiTransientResources.TryGetValue(objectKind, out HashSet<string>? value))
@@ -104,6 +134,9 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Gets the semi-transient resource paths for a given object kind.
+    /// </summary>
     public HashSet<string> GetSemiTransientResources(ObjectKind objectKind)
     {
         SemiTransientResources.TryGetValue(objectKind, out var result);
@@ -111,6 +144,10 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
         return result ?? new HashSet<string>(StringComparer.Ordinal);
     }
 
+    /// <summary>
+    /// Commits the currently observed transient resources to the semi-transient set for the given object kind
+    /// and persists to configuration when necessary.
+    /// </summary>
     public void PersistTransientResources(ObjectKind objectKind)
     {
         if (!SemiTransientResources.TryGetValue(objectKind, out HashSet<string>? semiTransientResources))
@@ -164,6 +201,9 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
         TransientResources[objectKind].Clear();
     }
 
+    /// <summary>
+    /// Removes a path from the recorded semi-transient resources for the object kind and saves configuration if needed.
+    /// </summary>
     public void RemoveTransientResource(ObjectKind objectKind, string path)
     {
         if (SemiTransientResources.TryGetValue(objectKind, out var resources))
@@ -192,6 +232,10 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
         return transientResource.Add(item.ToLowerInvariant());
     }
 
+    /// <summary>
+    /// Removes provided paths from both transient and semi-transient sets for the given object kind.
+    /// Ignores recording-only datatypes unless recording is active.
+    /// </summary>
     internal void ClearTransientPaths(ObjectKind objectKind, List<string> list)
     {
         // ignore all recording only datatypes
@@ -235,6 +279,7 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
             _semiTransientResources = null;
     }
 
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
@@ -287,6 +332,9 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
         });
     }
 
+    /// <summary>
+    /// Clears cached semi-transient sets so they will be lazily rebuilt using current configuration and job.
+    /// </summary>
     public void RebuildSemiTransientResources()
     {
         _semiTransientResources = null;
@@ -381,6 +429,9 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Debounced notification that transient sets changed for a specific object kind; publishes a mediator event after a short delay.
+    /// </summary>
     private void SendTransients(nint gameObject, ObjectKind objectKind)
     {
         _ = Task.Run(async () =>
@@ -401,6 +452,9 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
         });
     }
 
+    /// <summary>
+    /// Starts a timed capture of transient paths, typically triggered by the UI to record specific actions.
+    /// </summary>
     public void StartRecording(CancellationToken token)
     {
         if (IsTransientRecording) return;
@@ -424,6 +478,9 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
         });
     }
 
+    /// <summary>
+    /// Awaits completion of a recording session.
+    /// </summary>
     public async Task WaitForRecording(CancellationToken token)
     {
         while (IsTransientRecording)
@@ -432,6 +489,9 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Converts captured records into transient entries and publishes change notifications.
+    /// </summary>
     internal void SaveRecording()
     {
         HashSet<nint> addedTransients = [];
@@ -458,11 +518,17 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
     }
 
     private readonly HashSet<TransientRecord> _recordedTransients = [];
+    /// <summary>
+    /// Read-only view of recorded transient entries during a capture session.
+    /// </summary>
     public IReadOnlySet<TransientRecord> RecordedTransients => _recordedTransients;
 
     public ValueProgress<TimeSpan> RecordTimeRemaining { get; } = new();
     private CancellationTokenSource _sendTransientCts = new();
 
+    /// <summary>
+    /// Immutable record of a captured resource with owning object and whether it was already categorized as transient.
+    /// </summary>
     public record TransientRecord(GameObjectHandler Owner, string GamePath, string FilePath, bool AlreadyTransient)
     {
         public bool AddTransient { get; set; }

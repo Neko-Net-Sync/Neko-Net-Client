@@ -1,4 +1,12 @@
-﻿using Microsoft.Extensions.Logging;
+﻿/*
+   File: FileUploadManager.cs
+   Role: High-level uploader coordinating verification, compression, and upload of files to the server/CDN. Handles
+       batching, progress reporting, and fallback to munged upload when necessary.
+
+   Cross-service behavior:
+   - Uses orchestrator to resolve correct CDN base for a given server index and routes requests with proper auth.
+*/
+using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNet.API.Dto.Files;
 using NekoNet.API.Routes;
@@ -13,6 +21,10 @@ using System.Net.Http.Json;
 
 namespace NekoNetClient.WebAPI.Files;
 
+/// <summary>
+/// Manages verification and upload of local file content to the service/CDN. Performs compression, optional munging,
+/// and incremental progress reporting.
+/// </summary>
 public sealed class FileUploadManager : DisposableMediatorSubscriberBase
 {
     private readonly FileCacheManager _fileDbManager;
@@ -40,9 +52,18 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         });
     }
 
+    /// <summary>
+    /// Gets the set of currently pending/active uploads.
+    /// </summary>
     public List<FileTransfer> CurrentUploads { get; } = [];
+    /// <summary>
+    /// Gets a value indicating whether any uploads are active.
+    /// </summary>
     public bool IsUploading => CurrentUploads.Count > 0;
 
+    /// <summary>
+    /// Cancels the current upload batch if any is running and clears bookkeeping.
+    /// </summary>
     public bool CancelUpload()
     {
         if (CurrentUploads.Any())
@@ -58,6 +79,9 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         return false;
     }
 
+    /// <summary>
+    /// Requests deletion of all files on the remote service for the specified server (or current).
+    /// </summary>
     public async Task DeleteAllFiles(int? serverIndex = null)
     {
         var baseCdn = serverIndex.HasValue ? _orchestrator.GetFilesCdnUriForServerIndex(serverIndex.Value) : _orchestrator.FilesCdnUri;
@@ -65,6 +89,10 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         await _orchestrator.SendRequestAsync(HttpMethod.Post, MareFiles.ServerFilesDeleteAllFullPath(baseCdn)).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Uploads a set of file hashes, compressing content and reporting progress. Returns hashes that are missing locally
+    /// or forbidden by the server.
+    /// </summary>
     public async Task<List<string>> UploadFiles(List<string> hashesToUpload, IProgress<string> progress, CancellationToken? ct = null, int? serverIndex = null)
     {
         Logger.LogDebug("Trying to upload files");
@@ -104,6 +132,9 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         return [];
     }
 
+    /// <summary>
+    /// Uploads all file content referenced by the provided character data, limited to the current visibility set.
+    /// </summary>
     public async Task<CharacterData> UploadFiles(CharacterData data, List<UserData> visiblePlayers, int? serverIndex = null)
     {
         CancelUpload();
@@ -134,6 +165,9 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         Reset();
     }
 
+    /// <summary>
+    /// Queries the service for which files must be uploaded given a set of hashes and audience UIDs.
+    /// </summary>
     private async Task<List<UploadFileDto>> FilesSend(Uri baseCdn, List<string> hashes, List<string> uids, CancellationToken ct)
     {
         if (baseCdn == null) throw new InvalidOperationException("FileTransferManager is not initialized");
@@ -166,6 +200,9 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         return unverifiedUploadHashes;
     }
 
+    /// <summary>
+    /// Cancels and clears current upload state.
+    /// </summary>
     private void Reset()
     {
         _uploadCancellationTokenSource?.Cancel();
@@ -175,6 +212,9 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         _verifiedUploadedHashes.Clear();
     }
 
+    /// <summary>
+    /// Uploads a single compressed file with optional munging fallback on error, updating verification timestamps.
+    /// </summary>
     private async Task UploadFile(byte[] compressedFile, string fileHash, bool postProgress, CancellationToken uploadToken)
     {
         if (!_orchestrator.IsInitialized) throw new InvalidOperationException("FileTransferManager is not initialized");
@@ -206,6 +246,9 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Streams a compressed file to the server using ProgressableStreamContent, optionally applying munging.
+    /// </summary>
     private async Task UploadFileStream(byte[] compressedFile, string fileHash, bool munged, bool postProgress, CancellationToken uploadToken)
     {
         if (munged)
@@ -238,6 +281,9 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         Logger.LogDebug("[{hash}] Upload Status: {status}", fileHash, response.StatusCode);
     }
 
+    /// <summary>
+    /// For all file hashes that need verification, compress and upload content as permitted by the server.
+    /// </summary>
     private async Task UploadUnverifiedFiles(HashSet<string> unverifiedUploadHashes, List<UserData> visiblePlayers, CancellationToken uploadToken)
     {
         // Deduplicate upfront to avoid any downstream Single() surprises

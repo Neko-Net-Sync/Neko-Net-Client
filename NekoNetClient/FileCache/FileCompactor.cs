@@ -1,10 +1,28 @@
-﻿using Microsoft.Extensions.Logging;
+﻿// Neko-Net Client – File Compactor
+// ----------------------------------------------------------------------------
+// Purpose
+//   Applies Windows Overlay Filesystem (WOF) backed compression (XPRESS8K) to
+//   large files in the cache directory to minimize disk usage while keeping
+//   content readily available. Also provides robust file write/replace logic
+//   that tolerates brief sharing violations from the game or antivirus.
+//
+// Highlights
+//   - Compression is only applied on NTFS and when enabled in configuration.
+//   - Size-on-disk calculation respects cluster size and WOF compression.
+//   - WriteAllBytesAsync stages writes via .part and atomically replaces with
+//     retries to prevent corrupted partial files.
+// ----------------------------------------------------------------------------
+using Microsoft.Extensions.Logging;
 using NekoNetClient.MareConfiguration;
 using NekoNetClient.Services;
 using System.Runtime.InteropServices;
 
 namespace NekoNetClient.FileCache;
 
+/// <summary>
+/// Provides Windows-specific helpers to minimize storage footprint by applying WOF XPRESS8K compression
+/// to cache files, calculate true size-on-disk, and write files safely using an atomic replace pattern.
+/// </summary>
 public sealed class FileCompactor
 {
     public const uint FSCTL_DELETE_EXTERNAL_BACKING = 0x90314U;
@@ -18,6 +36,9 @@ public sealed class FileCompactor
     private readonly MareConfigService _mareConfigService;
     private readonly DalamudUtilService _dalamudUtilService;
 
+    /// <summary>
+    /// Initializes the compactor and caches cluster size queries.
+    /// </summary>
     public FileCompactor(ILogger<FileCompactor> logger, MareConfigService mareConfigService, DalamudUtilService dalamudUtilService)
     {
         _clusterSizes = new(StringComparer.Ordinal);
@@ -41,10 +62,19 @@ public sealed class FileCompactor
         XPRESS16K = 3
     }
 
+    /// <summary>
+    /// Indicates whether a mass compaction/decompaction pass is running.
+    /// </summary>
     public bool MassCompactRunning { get; private set; } = false;
 
+    /// <summary>
+    /// Progress string of the current mass operation (e.g. "3/42").
+    /// </summary>
     public string Progress { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// Walks all cache files and either compresses or decompresses them.
+    /// </summary>
     public void CompactStorage(bool compress)
     {
         MassCompactRunning = true;
@@ -65,6 +95,10 @@ public sealed class FileCompactor
         MassCompactRunning = false;
     }
 
+    /// <summary>
+    /// Computes the real size on disk of a file, accounting for cluster size and WOF compression.
+    /// Falls back to uncompressed length on Wine or non-NTFS drives.
+    /// </summary>
     public long GetFileSizeOnDisk(FileInfo fileInfo, bool? isNTFS = null)
     {
         bool ntfs = isNTFS ?? string.Equals(new DriveInfo(fileInfo.Directory!.Root.FullName).DriveFormat, "NTFS", StringComparison.OrdinalIgnoreCase);
@@ -78,6 +112,11 @@ public sealed class FileCompactor
         return ((size + clusterSize - 1) / clusterSize) * clusterSize;
     }
 
+    /// <summary>
+    /// Writes bytes to disk via a temporary file and atomically replaces the destination with
+    /// exponential backoff when the file is briefly locked by another process.
+    /// Applies compaction if enabled and supported.
+    /// </summary>
     public async Task WriteAllBytesAsync(string filePath, byte[] decompressedFile, CancellationToken token)
     {
         // Write to a temp file first, then atomically replace the destination with retries.
@@ -168,6 +207,9 @@ public sealed class FileCompactor
     [DllImport("WofUtil.dll")]
     private static extern int WofSetFileDataLocation(IntPtr FileHandle, ulong Provider, IntPtr ExternalFileInfo, ulong Length);
 
+    /// <summary>
+    /// Applies XPRESS8K compression to a single file if it is a candidate (NTFS, above cluster size, not already compacted).
+    /// </summary>
     private void CompactFile(string filePath)
     {
         var fs = new DriveInfo(new FileInfo(filePath).Directory!.Root.FullName);
@@ -204,6 +246,9 @@ public sealed class FileCompactor
         }
     }
 
+    /// <summary>
+    /// Removes WOF compression from a given file and logs any IO errors encountered.
+    /// </summary>
     private void DecompressFile(string path)
     {
         _logger.LogDebug("Removing compression from {file}", path);

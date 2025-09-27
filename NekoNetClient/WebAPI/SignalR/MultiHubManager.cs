@@ -1,3 +1,9 @@
+/*
+   File: MultiHubManager.cs
+   Role: Manages SignalR hub connections for multiple services (NekoNet, Lightless, etc.) and configured servers.
+         Maintains per-service/per-server PairManagers, tracks CDN addresses, and relays hub events to the mediator
+         and PairManager instances. Provides bootstrap routines to fetch pairs, groups, and online status on connect.
+*/
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
@@ -23,6 +29,11 @@ using System.Threading.Tasks;
 
 namespace NekoNetClient.WebAPI.SignalR
 {
+    /// <summary>
+    /// Coordinates multiple SignalR hub connections (by known service or configured server index),
+    /// wiring event handlers for user/group updates and download readiness, and publishing connection
+    /// context for CDN routing.
+    /// </summary>
     public sealed class MultiHubManager : MediatorSubscriberBase, IAsyncDisposable
     {
         private readonly ILogger<MultiHubManager> _log;

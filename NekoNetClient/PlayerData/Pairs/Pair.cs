@@ -1,4 +1,22 @@
-﻿using Dalamud.Game.Gui.ContextMenu;
+﻿/*
+     Neko-Net Client — PlayerData.Pairs.Pair
+     ---------------------------------------
+     Purpose
+     - Represents one user pairing (direct and/or group-linked), holding the current relationship state,
+         permissions, cached character data, and the associated in-game handler.
+     - Bridges UI, apply pipeline, and configuration (notes/tags) across multi-service setups via optional API URL override.
+
+     Behavior overview
+     - Maintains an optional <see cref="PairHandler"/> (created on demand) that performs downloads and in-game application.
+     - Tracks last received character data for re-application on visibility return or when permissions allow.
+     - Filters mod content by effective permissions before applying to ensure compliance (animations, sounds, VFX).
+     - Exposes context menu entries for quick actions (open profile, reapply, change permissions, cycle pause).
+
+     Concurrency
+     - Uses a semaphore to serialize creation/disposal of the handler and protect against race conditions from
+         rapidly changing presence or apply triggers.
+*/
+using Dalamud.Game.Gui.ContextMenu;
 using Dalamud.Game.Text.SeStringHandling;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
@@ -14,6 +32,14 @@ using NekoNetClient.Services.Events;
 
 namespace NekoNetClient.PlayerData.Pairs;
 
+/// <summary>
+/// Represents a single paired user within the client, including relationship status, permissions,
+/// cached data, and an optional in-game <c>PairHandler</c> responsible for downloads and application.
+/// <para>
+/// The pair coordinates permission-aware application of character data and ensures that operations
+/// such as handler creation/disposal are performed safely under a semaphore to avoid race conditions.
+/// </para>
+/// </summary>
 public class Pair
 {
     private readonly PairHandlerFactory _cachedPlayerFactory;
@@ -38,6 +64,9 @@ public class Pair
         _apiUrlOverride = apiUrlOverride;
     }
 
+    /// <summary>
+    /// True when an active <c>PairHandler</c> exists and a resolved player identity is known.
+    /// </summary>
     public bool HasCachedPlayer => CachedPlayer != null && !string.IsNullOrEmpty(CachedPlayer.PlayerName) && _onlineUserIdentDto != null;
     public IndividualPairStatus IndividualPairStatus => UserPair.IndividualPairStatus;
     public bool IsDirectlyPaired => IndividualPairStatus != IndividualPairStatus.None;
@@ -46,7 +75,13 @@ public class Pair
 
     public bool IsPaired => IndividualPairStatus == IndividualPairStatus.Bidirectional || UserPair.Groups.Any();
     public bool IsPaused => UserPair.OwnPermissions.IsPaused();
+    /// <summary>
+    /// Whether the paired character is currently visible in the world (as seen by the live handler).
+    /// </summary>
     public bool IsVisible => CachedPlayer?.IsVisible ?? false;
+    /// <summary>
+    /// Whether an application pipeline is currently in progress for this pair (used to gate UI actions).
+    /// </summary>
     public bool IsApplying => _isApplying;
     public bool DeferCleanupOnce => _deferCleanupOnce;
     public CharacterData? LastReceivedCharacterData { get; set; }
@@ -61,9 +96,14 @@ public class Pair
     public UserFullPairDto UserPair { get; set; }
     private PairHandler? CachedPlayer { get; set; }
 
-    // Expose the API URL override (used by service-scoped pairs)
+    /// <summary>
+    /// The API URL override for service-scoped pairs. When set, notes/tags and some UI labels reflect the service.
+    /// </summary>
     public string? ApiUrlOverride => _apiUrlOverride;
 
+    /// <summary>
+    /// Integrates context menu entries for actions related to this pair when right-clicking the in-game character.
+    /// </summary>
     public void AddContextMenu(IMenuOpenedArgs args)
     {
         if (CachedPlayer == null || (args.Target is not MenuTargetDefault target) || target.TargetObjectId != CachedPlayer.PlayerCharacterId) return;
@@ -119,6 +159,10 @@ public class Pair
         });
     }
 
+    /// <summary>
+    /// Receives live character data and triggers an application. If the handler is not yet created,
+    /// the data is buffered and applied once the handler appears or times out.
+    /// </summary>
     public void ApplyData(OnlineUserCharaDataDto data)
     {
         _applicationCts = _applicationCts.CancelRecreate();
@@ -150,6 +194,10 @@ public class Pair
         ApplyLastReceivedData();
     }
 
+    /// <summary>
+    /// Applies the last received character data, honoring permission filters. When <paramref name="forced"/>
+    /// is true, forces a reapply even if hashes match to recover from transient states.
+    /// </summary>
     public void ApplyLastReceivedData(bool forced = false)
     {
         if (CachedPlayer == null) return;
@@ -158,18 +206,25 @@ public class Pair
         CachedPlayer.ApplyCharacterData(Guid.NewGuid(), RemoveNotSyncedFiles(LastReceivedCharacterData.DeepClone())!, forced);
     }
 
+    /// <summary>
+    /// Sets the internal applying flag to inform UI and defuse actions that could clash during application.
+    /// </summary>
     internal void SetApplying(bool applying)
     {
         _isApplying = applying;
     }
 
-    // Mark that the next cleanup (e.g., after pausing) should be deferred entirely to avoid freezing
+    /// <summary>
+    /// Mark that the next cleanup (e.g., after pausing) should be deferred entirely to avoid freezing.
+    /// </summary>
     public void MarkDeferCleanupOnce()
     {
         _deferCleanupOnce = true;
     }
 
-    // Consume the defer flag once, returning true if a deferral was requested
+    /// <summary>
+    /// Consume the defer flag once; returns true if a deferral was requested.
+    /// </summary>
     internal bool ConsumeDeferCleanupOnce()
     {
         if (_deferCleanupOnce)
@@ -180,6 +235,10 @@ public class Pair
         return false;
     }
 
+    /// <summary>
+    /// Ensures a <see cref="PairHandler"/> exists for this pair and initializes it with the latest ident.
+    /// Protected by a semaphore to avoid duplicate creation under race.
+    /// </summary>
     public void CreateCachedPlayer(OnlineUserIdentDto? dto = null)
     {
         try
@@ -208,22 +267,34 @@ public class Pair
         }
     }
 
+    /// <summary>
+    /// Gets the configured note/tag for this UID, taking service scope into account if applicable.
+    /// </summary>
     public string? GetNote()
     {
         if (_apiUrlOverride == null) return _serverConfigurationManager.GetNoteForUid(UserData.UID);
         return _serverConfigurationManager.GetNoteForUidForApiUrl(_apiUrlOverride, UserData.UID);
     }
 
+    /// <summary>
+    /// Returns the hash used to locate the player in the object table, or empty if unknown.
+    /// </summary>
     public string GetPlayerNameHash()
     {
         return CachedPlayer?.PlayerNameHash ?? string.Empty;
     }
 
+    /// <summary>
+    /// Whether the pair has any connection (direct or via groups).
+    /// </summary>
     public bool HasAnyConnection()
     {
         return UserPair.Groups.Any() || UserPair.IndividualPairStatus != IndividualPairStatus.None;
     }
 
+    /// <summary>
+    /// Marks this pair as offline and disposes its handler. Optionally logs an informational reason.
+    /// </summary>
     public void MarkOffline(bool wait = true, string? reason = null)
     {
         try
@@ -253,6 +324,9 @@ public class Pair
         }
     }
 
+    /// <summary>
+    /// Sets the note/tag for this pair UID, taking service scope into account if applicable.
+    /// </summary>
     public void SetNote(string note)
     {
         if (_apiUrlOverride == null)
@@ -266,6 +340,10 @@ public class Pair
         CachedPlayer?.SetUploading();
     }
 
+    /// <summary>
+    /// Filters out content not permitted by effective permissions (animations, sounds, VFX) from the
+    /// character data prior to application.
+    /// </summary>
     private CharacterData? RemoveNotSyncedFiles(CharacterData? data)
     {
         _logger.LogTrace("Removing not synced files");

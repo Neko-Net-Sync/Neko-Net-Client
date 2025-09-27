@@ -1,3 +1,8 @@
+/*
+   File: ApiController.Functions.Users.cs
+   Role: Partial: Outgoing user-related operations exposed by ApiController for the main configured connection,
+       including pushing character data, pair add/remove, profile and permissions updates.
+*/
 using NekoNetClient.Services.Events;
 using NekoNetClient.Services.Mediator;
 using Microsoft.AspNetCore.SignalR.Client;

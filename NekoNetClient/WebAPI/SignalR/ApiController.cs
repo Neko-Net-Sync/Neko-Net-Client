@@ -1,4 +1,10 @@
-﻿using Dalamud.Utility;
+﻿/*
+   File: ApiController.cs
+   Role: Primary SignalR client for the "main" configured server connection. Orchestrates auth, connection lifecycle,
+       event subscriptions, and exposes a facade for user/group operations. Publishes mediator events and maintains
+       ServerState for UI/logic.
+*/
+using Dalamud.Utility;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
@@ -18,6 +24,10 @@ using System.Reflection;
 namespace NekoNetClient.WebAPI.SignalR;
 
 #pragma warning disable MA0040
+/// <summary>
+/// SignalR hub controller for the active configured server. Handles connection lifecycle, version checks,
+/// user notifications, and event wiring to the PairManager.
+/// </summary>
 public sealed partial class ApiController : DisposableMediatorSubscriberBase, IMareHubClient
 {
     public const string MainServer = "Neko-Net";

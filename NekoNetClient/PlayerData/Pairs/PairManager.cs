@@ -1,4 +1,27 @@
-﻿using Dalamud.Plugin.Services;
+﻿/*
+     Neko-Net Client — PlayerData.Pairs.PairManager
+     ------------------------------------------------
+     Purpose
+     - Central registry for all known pairs (direct and group) within the client session.
+     - Tracks cross-service presence by optionally scoping to an API URL override (service-scoped mode),
+         and maintains pair lifecycles without disposing users that are still present on another service.
+     - Provides lazy materialized views for: direct pairs, group pairs, and pairs with groups to power UI.
+     - Reacts to mediator events (disconnects, cutscene end) to keep the on-screen state consistent and
+         trigger safe reapplication of the last received character data when appropriate.
+
+     Notes on behavior
+     - When operating in service-scoped mode, the manager will not subscribe to global disconnection clear events.
+         This ensures pairs that continue to exist on another hub/service remain intact and are not disposed.
+     - Pair permissions are synchronized from server payloads on every update. When pause state changes,
+         related profile data is cleared to avoid stale UI remnants.
+     - The manager does not perform heavy apply work itself; instead it delegates to Pair objects which in turn
+         coordinate PairHandler instances for downloads and in-game application. This keeps responsibilities focused.
+
+     Threading and performance
+     - Internally uses ConcurrentDictionaries keyed by domain DTOs with stable comparers to avoid locking.
+     - Exposes precomputed lazy containers that are re-created on mutations to avoid repeated recomputation.
+*/
+using Dalamud.Plugin.Services;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNet.API.Data.Comparer;
@@ -16,6 +39,21 @@ using System.Collections.Concurrent;
 
 namespace NekoNetClient.PlayerData.Pairs;
 
+/// <summary>
+/// Manages the set of all known pairs for the active client scope.
+/// <para>
+/// Responsibilities:
+/// - Store and update <see cref="Pair"/> instances keyed by <see cref="UserData"/>,
+/// - Track group membership and expose fast UI-friendly views,
+/// - React to lifecycle events (disconnect, cutscene end) to clear or reapply state,
+/// - Enforce cross-service semantics via optional API URL override to prevent unnecessary disposal.
+/// </para>
+/// <para>
+/// This manager is intentionally lightweight: heavy operations such as download/apply pipelines are delegated to
+/// the <see cref="Pair"/> and its <c>PairHandler</c>. The manager focuses on consistency, permissions propagation,
+/// and minimal recomputation via lazily computed views.
+/// </para>
+/// </summary>
 public sealed class PairManager : DisposableMediatorSubscriberBase
 {
     private readonly ConcurrentDictionary<UserData, Pair> _allClientPairs = new(UserDataComparer.Instance);
@@ -48,19 +86,42 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         _dalamudContextMenu.OnMenuOpened += DalamudContextMenuOnOnOpenGameObjectContextMenu;
     }
 
+    /// <summary>
+    /// Gets the list of all directly paired users (bidirectional or one-sided), excluding group-only users.
+    /// </summary>
     public List<Pair> DirectPairs => _directPairsInternal.Value;
 
+    /// <summary>
+    /// Gets the mapping of group metadata to its current member pairs.
+    /// </summary>
     public Dictionary<GroupFullInfoDto, List<Pair>> GroupPairs => _groupPairsInternal.Value;
+    /// <summary>
+    /// Gets the current known groups keyed by <see cref="GroupData"/>.
+    /// </summary>
     public Dictionary<GroupData, GroupFullInfoDto> Groups => _allGroups.ToDictionary(k => k.Key, k => k.Value);
+    /// <summary>
+    /// Gets the last pair instance that was added (used by some UI flows for focus/selection).
+    /// </summary>
     public Pair? LastAddedUser { get; internal set; }
+    /// <summary>
+    /// Gets a reverse mapping for UI: a pair to the list of groups it currently belongs to.
+    /// </summary>
     public Dictionary<Pair, List<GroupFullInfoDto>> PairsWithGroups => _pairsWithGroupsInternal.Value;
 
+    /// <summary>
+    /// Registers a group in the local index. If the group already exists, it is refreshed with the provided data.
+    /// </summary>
+    /// <param name="dto">The full group info received from the server.</param>
     public void AddGroup(GroupFullInfoDto dto)
     {
         _allGroups[dto.Group] = dto;
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Registers or updates a group pair membership for a user and ensures the pair exists.
+    /// </summary>
+    /// <param name="dto">The group pair information payload.</param>
     public void AddGroupPair(GroupPairFullInfoDto dto)
     {
         if (!_allClientPairs.ContainsKey(dto.User))
@@ -72,6 +133,11 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Retrieves a pair by UID if present.
+    /// </summary>
+    /// <param name="uid">The user UID.</param>
+    /// <returns>The <see cref="Pair"/> instance or null if not found.</returns>
     public Pair? GetPairByUID(string uid)
     {
         var existingPair = _allClientPairs.FirstOrDefault(f => f.Key.UID == uid);
@@ -83,6 +149,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         return null;
     }
 
+    /// <summary>
+    /// Adds or updates a direct pair using the full payload from the server.
+    /// Always synchronizes permissions and, if the pair is not paused, triggers application of last received data.
+    /// </summary>
     public void AddUserPair(UserFullPairDto dto)
     {
         if (!_allClientPairs.ContainsKey(dto.User))
@@ -105,6 +175,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Adds or updates a direct pair using a minimal payload, optionally tagging the newly added user
+    /// as the last-added for UI purposes. Permissions are synchronized and, if not paused, last data is applied.
+    /// </summary>
     public void AddUserPair(UserPairDto dto, bool addToLastAddedUser = true)
     {
         if (!_allClientPairs.ContainsKey(dto.User))
@@ -126,6 +200,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Clears all pair and group state. Disposes pair instances and rebuilds all lazy views.
+    /// In non-service-scoped managers this is typically called on disconnect.
+    /// </summary>
     public void ClearPairs()
     {
         Logger.LogDebug("Clearing all Pairs");
@@ -135,12 +213,24 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Returns all user pairs that are currently online (have a known player name hash).
+    /// </summary>
     public List<Pair> GetOnlineUserPairs() => _allClientPairs.Where(p => !string.IsNullOrEmpty(p.Value.GetPlayerNameHash())).Select(p => p.Value).ToList();
 
+    /// <summary>
+    /// Gets the count of pairs currently visible on screen.
+    /// </summary>
     public int GetVisibleUserCount() => _allClientPairs.Count(p => p.Value.IsVisible);
 
+    /// <summary>
+    /// Returns all users that are currently visible.
+    /// </summary>
     public List<UserData> GetVisibleUsers() => [.. _allClientPairs.Where(p => p.Value.IsVisible).Select(p => p.Key)];
 
+    /// <summary>
+    /// Marks the provided user as offline and publishes a profile clear message.
+    /// </summary>
     public void MarkPairOffline(UserData user)
     {
         if (_allClientPairs.TryGetValue(user, out var pair))
@@ -152,7 +242,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
-    // Remove only users not present on other services, using provided predicate
+    /// <summary>
+    /// Selectively removes pairs based on the provided predicate. This is used to remove users that
+    /// are no longer present on a specific service while keeping those that still exist elsewhere.
+    /// </summary>
     public void SelectiveClear(Func<UserData, bool> shouldRemove)
     {
         foreach (var item in _allClientPairs.ToList())
@@ -164,6 +257,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Marks a pair as online using the provided identification payload and optionally shows a notification.
+    /// If the cached player already exists, the method returns early to avoid duplicate handlers.
+    /// </summary>
     public void MarkPairOnline(OnlineUserIdentDto dto, bool sendNotif = true)
     {
         if (!_allClientPairs.ContainsKey(dto.User)) throw new InvalidOperationException("No user found for " + dto);
@@ -195,6 +292,9 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Receives the character data for a user and either applies it immediately or stores it if the pair is paused.
+    /// </summary>
     public void ReceiveCharaData(OnlineUserCharaDataDto dto)
     {
         if (!_allClientPairs.TryGetValue(dto.User, out var pair)) throw new InvalidOperationException("No user found for " + dto.User);
@@ -210,6 +310,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         _allClientPairs[dto.User].ApplyData(dto);
     }
 
+    /// <summary>
+    /// Removes a group entirely from the manager and updates all pairs. Pairs with no remaining connections
+    /// (no groups and no direct relation) are marked offline and removed.
+    /// </summary>
     public void RemoveGroup(GroupData data)
     {
         _allGroups.TryRemove(data, out _);
@@ -228,6 +332,9 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Removes a specific user from a group and prunes the pair if it no longer has any connections.
+    /// </summary>
     public void RemoveGroupPair(GroupPairDto dto)
     {
         if (_allClientPairs.TryGetValue(dto.User, out var pair))
@@ -244,6 +351,9 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Removes a direct pair relationship from a user and prunes it if it no longer has any connections.
+    /// </summary>
     public void RemoveUserPair(UserDto dto)
     {
         if (_allClientPairs.TryGetValue(dto.User, out var pair))
@@ -260,6 +370,9 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Updates the high-level metadata for a group.
+    /// </summary>
     public void SetGroupInfo(GroupInfoDto dto)
     {
         _allGroups[dto.Group].Group = dto.Group;
@@ -269,6 +382,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Updates the permissions that others have towards self for the specified user and re-applies data
+    /// if the pair is not paused. Also emits trace logging of the new state.
+    /// </summary>
     public void UpdatePairPermissions(UserPermissionsDto dto)
     {
         if (!_allClientPairs.TryGetValue(dto.User, out var pair))
@@ -297,6 +414,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RecreateLazy();
     }
 
+    /// <summary>
+    /// Updates the permissions self has towards the specified user and re-applies data if not paused.
+    /// Clears profile data when toggling pause to avoid stale UI renderings.
+    /// </summary>
     public void UpdateSelfPairPermissions(UserPermissionsDto dto)
     {
         if (!_allClientPairs.TryGetValue(dto.User, out var pair))

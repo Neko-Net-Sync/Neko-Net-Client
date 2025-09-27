@@ -1,4 +1,9 @@
-﻿using Microsoft.AspNetCore.SignalR.Client;
+﻿/*
+   File: ApiController.Functions.Callbacks.cs
+   Role: Partial: Hub-to-client callback handlers invoked by the server, updating PairManager and publishing
+       mediator events. Includes download ready, group updates, user online/offline, and gpose events.
+*/
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNet.API.Data.Enum;

@@ -1,4 +1,21 @@
-﻿using FFXIVClientStructs.FFXIV.Client.Game.Character;
+﻿/*
+     Neko-Net Client — PlayerData.Handlers.GameObjectHandler
+     -------------------------------------------------------
+     Purpose
+     - Lightweight wrapper around a live game object pointer that tracks draw/visibility state, equipment and
+         customization diffs, and publishes messages to drive caching and application flows.
+
+     Behavior
+     - Periodically checks object state on framework ticks, detecting changes in draw conditions, equipment, and
+         customization. When self-owned, emits CreateCacheForObjectMessage to refresh cache entries.
+     - Handles zoning, cutscenes, and plugin redraw windows to defer processing and avoid race conditions while
+         the game is drawing or objects are invalid.
+
+     Notes
+     - Resolves addresses under the framework thread to ensure pointer safety.
+     - Exposes helper methods for safe operations such as CompareNameAndThrow and ActOnFrameworkAfterEnsureNoDrawAsync.
+*/
+using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.Services;
@@ -9,6 +26,10 @@ using ObjectKind = NekoNet.API.Data.Enum.ObjectKind;
 
 namespace NekoNetClient.PlayerData.Handlers;
 
+/// <summary>
+/// Tracks and exposes the state of a specific game object (player, pet, minion/mount, companion),
+/// detects draw/visibility conditions, and emits mediator messages to maintain cache coherence.
+/// </summary>
 public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighPriorityMediatorSubscriber
 {
     private readonly DalamudUtilService _dalamudUtil;
@@ -80,6 +101,9 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         _dalamudUtil.RunOnFrameworkThread(CheckAndUpdateObject).GetAwaiter().GetResult();
     }
 
+    /// <summary>
+    /// Represents the current draw condition of the object, used to determine whether application is safe.
+    /// </summary>
     public enum DrawCondition
     {
         None,
@@ -90,12 +114,19 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         ModelFilesInSlotLoaded
     }
 
+    /// <summary>Raw address of the target game object.</summary>
     public IntPtr Address { get; private set; }
+    /// <summary>Computed draw condition used by IsBeingDrawn logic.</summary>
     public DrawCondition CurrentDrawCondition { get; set; } = DrawCondition.None;
+    /// <summary>Detected gender for self-owned player objects.</summary>
     public byte Gender { get; private set; }
+    /// <summary>Resolved name of the game object.</summary>
     public string Name { get; private set; }
+    /// <summary>Kind of object that is tracked by this handler.</summary>
     public ObjectKind ObjectKind { get; }
+    /// <summary>Detected race id for self-owned player objects.</summary>
     public byte RaceId { get; private set; }
+    /// <summary>Detected tribe id for self-owned player objects.</summary>
     public byte TribeId { get; private set; }
     private byte[] CustomizeData { get; set; } = new byte[26];
     private IntPtr DrawObjectAddress { get; set; }
@@ -103,6 +134,10 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
     private ushort[] MainHandData { get; set; } = new ushort[3];
     private ushort[] OffHandData { get; set; } = new ushort[3];
 
+    /// <summary>
+    /// Runs the provided action once a safe "no draw" window is detected on the framework thread for this object.
+    /// This avoids applying changes while the game is actively rendering the model.
+    /// </summary>
     public async Task ActOnFrameworkAfterEnsureNoDrawAsync(Action<Dalamud.Game.ClientState.Objects.Types.ICharacter> act, CancellationToken token)
     {
         while (await _dalamudUtil.RunOnFrameworkThread(() =>
@@ -121,6 +156,9 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         }
     }
 
+    /// <summary>
+    /// Ensures that the current object still matches the provided name and pointer is valid, else throws.
+    /// </summary>
     public void CompareNameAndThrow(string name)
     {
         if (!string.Equals(Name, name, StringComparison.OrdinalIgnoreCase))
@@ -133,11 +171,13 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         }
     }
 
+    /// <summary>Creates a Dalamud IGameObject from the current address.</summary>
     public Dalamud.Game.ClientState.Objects.Types.IGameObject? GetGameObject()
     {
         return _dalamudUtil.CreateGameObject(Address);
     }
 
+    /// <summary>Marks the handler as invalid by clearing pointers and halting draw gating.</summary>
     public void Invalidate()
     {
         Address = IntPtr.Zero;
@@ -145,6 +185,9 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         _haltProcessing = false;
     }
 
+    /// <summary>
+    /// Computes the draw condition on the framework thread for this object.
+    /// </summary>
     public async Task<bool> IsBeingDrawnRunOnFrameworkAsync()
     {
         return await _dalamudUtil.RunOnFrameworkThread(IsBeingDrawn).ConfigureAwait(false);
@@ -156,6 +199,9 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         return $"{owned}/{ObjectKind}:{Name} ({Address:X},{DrawObjectAddress:X})";
     }
 
+    /// <summary>
+    /// Publishes a destruction message so caches can be released for this object.
+    /// </summary>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
@@ -353,6 +399,10 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         }
     }
 
+    /// <summary>
+    /// Determines if the game is currently drawing this object, or if a global draw block is active,
+    /// to defer expensive operations safely.
+    /// </summary>
     private bool IsBeingDrawn()
     {
         if (_haltProcessing) CheckAndUpdateObject();
@@ -367,6 +417,9 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         return CurrentDrawCondition != DrawCondition.None;
     }
 
+    /// <summary>
+    /// Low-level draw condition evaluation using FFXIV structs.
+    /// </summary>
     private unsafe DrawCondition IsBeingDrawnUnsafe()
     {
         if (Address == IntPtr.Zero) return DrawCondition.ObjectZero;
@@ -385,6 +438,9 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         return DrawCondition.None;
     }
 
+    /// <summary>
+    /// Signals that zone switching has finished and shortens the zoning timeout to resume work.
+    /// </summary>
     private void ZoneSwitchEnd()
     {
         if (!_isOwnedObject) return;
@@ -403,6 +459,9 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         }
     }
 
+    /// <summary>
+    /// Signals the start of zone switching and defers work for a grace period to avoid flapping state.
+    /// </summary>
     private void ZoneSwitchStart()
     {
         if (!_isOwnedObject) return;

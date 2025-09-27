@@ -1,4 +1,10 @@
-﻿using Microsoft.Extensions.Logging;
+﻿/*
+   File: TokenProvider.cs
+   Role: Centralized JWT token acquisition/renewal for both single current server and per-configured server contexts.
+         Normalizes API bases (ws(s)→http(s)), caches tokens keyed by JwtIdentifier, and publishes notifications on
+         auth failures or invalid system clock conditions.
+*/
+using Microsoft.Extensions.Logging;
 using NekoNet.API.Routes;
 using NekoNetClient.MareConfiguration.Models;
 using NekoNetClient.Services;
@@ -12,6 +18,10 @@ using System.Reflection;
 
 namespace NekoNetClient.WebAPI.SignalR;
 
+/// <summary>
+/// Provides JWT tokens required for authentication, including renewal and per-server variants
+/// used by multi-service connections. Emits user-facing notifications on key failure conditions.
+/// </summary>
 public sealed class TokenProvider : IDisposable, IMediatorSubscriber
 {
     private readonly DalamudUtilService _dalamudUtil;

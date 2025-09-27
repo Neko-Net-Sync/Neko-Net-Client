@@ -1,4 +1,14 @@
-﻿namespace NekoNetClient.WebAPI.Files
+﻿/*
+   File: ThrottledStream.cs
+   Role: Wrapper Stream that enforces a bandwidth limit (bytes/sec) over an underlying stream. Used to cap CDN
+         download throughput per active slot to respect user-configured limits. Adapted from bezzad/Downloader.
+
+   Behavior:
+   - BandwidthLimit <= 0 means no explicit cap (treated as Infinite).
+   - Computes momentary and average speeds and injects delay to approximate the configured cap.
+   - Respects cancellation; dynamically updates limit when BandwidthLimit changes.
+*/
+namespace NekoNetClient.WebAPI.Files
 {
     /// <summary>
     ///     Class for streaming data with throttling support.

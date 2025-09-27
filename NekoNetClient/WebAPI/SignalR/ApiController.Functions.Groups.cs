@@ -1,4 +1,9 @@
-﻿using Microsoft.AspNetCore.SignalR.Client;
+﻿/*
+   File: ApiController.Functions.Groups.cs
+   Role: Partial: Group management operations exposed by ApiController (create/join/leave, permissions, pruning,
+       bans). Thin wrappers around Hub invocations.
+*/
+using Microsoft.AspNetCore.SignalR.Client;
 using NekoNet.API.Dto.Group;
 using NekoNetClient.WebAPI.SignalR.Utils;
 

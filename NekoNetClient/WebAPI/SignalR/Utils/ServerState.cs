@@ -1,5 +1,12 @@
-﻿namespace NekoNetClient.WebAPI.SignalR.Utils;
+﻿/*
+   File: ServerState.cs
+   Role: High-level connection state machine for the main ApiController connection, used by UI and logic.
+*/
+namespace NekoNetClient.WebAPI.SignalR.Utils;
 
+/// <summary>
+/// Represents the lifecycle states of the primary server connection.
+/// </summary>
 public enum ServerState
 {
     Offline,

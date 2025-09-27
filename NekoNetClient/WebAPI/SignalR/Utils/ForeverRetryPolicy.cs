@@ -1,9 +1,17 @@
-﻿using Microsoft.AspNetCore.SignalR.Client;
+﻿/*
+   File: ForeverRetryPolicy.cs
+   Role: SignalR retry policy that retries indefinitely with backoff, emitting user notifications after
+         initial attempts fail and publishing a Disconnected message when prolonged.
+*/
+using Microsoft.AspNetCore.SignalR.Client;
 using NekoNetClient.MareConfiguration.Models;
 using NekoNetClient.Services.Mediator;
 
 namespace NekoNetClient.WebAPI.SignalR.Utils;
 
+/// <summary>
+/// Retry policy that never gives up, gradually increasing delay and notifying the user after multiple failures.
+/// </summary>
 public class ForeverRetryPolicy : IRetryPolicy
 {
     private readonly MareMediator _mediator;

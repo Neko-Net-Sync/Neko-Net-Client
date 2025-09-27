@@ -1,4 +1,9 @@
-﻿using MessagePack;
+﻿/*
+   File: HubFactory.cs
+   Role: Creates and caches the main HubConnection with configured transports, messagepack settings, logging, and
+       automatic reconnect policy. Adjusts transports for Wine when appropriate.
+*/
+using MessagePack;
 using MessagePack.Resolvers;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -12,6 +17,10 @@ using NekoNetClient.WebAPI.SignalR.Utils;
 
 namespace NekoNetClient.WebAPI.SignalR;
 
+/// <summary>
+/// Builds the primary HubConnection instance for the currently selected server, configuring
+/// authentication, transports, serializers, logging, and reconnect policy.
+/// </summary>
 public class HubFactory : MediatorSubscriberBase
 {
     private readonly ILoggerProvider _loggingProvider;

@@ -1,4 +1,35 @@
-﻿using K4os.Compression.LZ4.Legacy;
+﻿// Neko-Net Client – File Cache Manager
+// ----------------------------------------------------------------------------
+// Purpose
+//   Central index and integrity authority for local file storage used by the
+//   client. Tracks both:
+//     - Penumbra-managed files (prefixed as {penumbra}) for discovery purposes
+//     - Client cache files (prefixed as {cache}) that back downloaded assets
+//   Persists a lightweight CSV catalog (FileCache.csv) to allow very fast
+//   startup without an expensive re-scan. Provides validation, migration, and
+//   selective refresh operations, and integrates with the mediator to pause
+//   scans when large IO operations are in flight.
+//
+// Key concepts
+//   - Prefix mapping: {penumbra} and {cache} are logical roots translated to
+//     actual absolute paths at runtime. This allows the catalog to remain
+//     portable across different machines or after configuration changes.
+//   - Integrity: Each entry carries a SHA-1 hash, last-write ticks, and sizes.
+//     The manager can verify presence, timestamps, and optionally recompute
+//     hashes to detect corruption or external modifications.
+//   - Concurrency: Thread-safe dictionaries and coarse write locks protect the
+//     CSV and in-memory index. A semaphore batches lookups by path to avoid
+//     thrashing during filesystem watcher bursts.
+//   - Service lifecycle: Implements IHostedService to restore the catalog and
+//     write it back on shutdown. A .bak file is used to ensure durability.
+//
+// Notes
+//   - All public operations are designed to be resilient to races with other
+//     processes (game, anti-virus). IO exceptions are logged and tolerated.
+//   - Validation favors minimal touching: timestamps are used before hashing;
+//     callers can opt into strict validation paths when required.
+// ----------------------------------------------------------------------------
+using K4os.Compression.LZ4.Legacy;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.Interop.Ipc;
@@ -11,10 +42,27 @@ using System.Text;
 
 namespace NekoNetClient.FileCache;
 
+/// <summary>
+/// Provides discovery, indexing, and validation for locally stored files used by the client and Penumbra.
+/// Maintains an in-memory map of content-hash to one-or-many file locations, persists a CSV catalog, and
+/// exposes utilities to reconcile on-disk state with the catalog. Implements <see cref="IHostedService"/>
+/// to restore the index on startup and flush it to disk on shutdown.
+/// </summary>
 public sealed class FileCacheManager : IHostedService
 {
+    /// <summary>
+    /// Logical prefix for paths originating in the client cache directory.
+    /// Mapped to the configured cache folder at runtime.
+    /// </summary>
     public const string CachePrefix = "{cache}";
+    /// <summary>
+    /// Separator used by lines in the CSV catalog.
+    /// </summary>
     public const string CsvSplit = "|";
+    /// <summary>
+    /// Logical prefix for paths originating in the Penumbra mod directory.
+    /// Mapped to the live Penumbra path at runtime.
+    /// </summary>
     public const string PenumbraPrefix = "{penumbra}";
     private readonly MareConfigService _configService;
     private readonly MareMediator _mareMediator;
@@ -24,8 +72,14 @@ public sealed class FileCacheManager : IHostedService
     private readonly object _fileWriteLock = new();
     private readonly IpcManager _ipcManager;
     private readonly ILogger<FileCacheManager> _logger;
+    /// <summary>
+    /// Gets the absolute path to the configured cache folder.
+    /// </summary>
     public string CacheFolder => _configService.Current.CacheFolder;
 
+    /// <summary>
+    /// Initializes a new instance, wiring configuration, mediator, and filesystem integration.
+    /// </summary>
     public FileCacheManager(ILogger<FileCacheManager> logger, IpcManager ipcManager, MareConfigService configService, MareMediator mareMediator)
     {
         _logger = logger;
@@ -37,6 +91,10 @@ public sealed class FileCacheManager : IHostedService
 
     private string CsvBakPath => _csvPath + ".bak";
 
+    /// <summary>
+    /// Creates and registers a catalog entry for a file located inside the cache folder.
+    /// Returns null if the path does not exist or does not reside in the cache root.
+    /// </summary>
     public FileCacheEntity? CreateCacheEntry(string path)
     {
         FileInfo fi = new(path);
@@ -48,6 +106,10 @@ public sealed class FileCacheManager : IHostedService
         return CreateFileCacheEntity(fi, prefixedPath);
     }
 
+    /// <summary>
+    /// Creates and registers a catalog entry for a file located inside the Penumbra mod directory.
+    /// Returns null if the path does not exist or does not reside in Penumbra's root.
+    /// </summary>
     public FileCacheEntity? CreateFileEntry(string path)
     {
         FileInfo fi = new(path);
@@ -59,8 +121,18 @@ public sealed class FileCacheManager : IHostedService
         return CreateFileCacheEntity(fi, prefixedPath);
     }
 
+    /// <summary>
+    /// Returns a flattened list of all cached entities across all hashes.
+    /// </summary>
     public List<FileCacheEntity> GetAllFileCaches() => _fileCaches.Values.SelectMany(v => v).ToList();
 
+    /// <summary>
+    /// Retrieves all catalog entries for a given content hash.
+    /// </summary>
+    /// <param name="hash">The 40-character SHA-1 hex string.</param>
+    /// <param name="ignoreCacheEntries">If true, excludes items from the {cache} root, returning only Penumbra-backed files.</param>
+    /// <param name="validate">If true, validates and filters out entries that no longer exist or require deletion.</param>
+    /// <returns>Matching entries, optionally filtered by validation state.</returns>
     public List<FileCacheEntity> GetAllFileCachesByHash(string hash, bool ignoreCacheEntries = false, bool validate = true)
     {
         List<FileCacheEntity> output = [];
@@ -80,6 +152,13 @@ public sealed class FileCacheManager : IHostedService
         return output;
     }
 
+    /// <summary>
+    /// Iterates stored cache entries and verifies presence and hash correctness.
+    /// Missing or mismatched files are returned and removed from the in-memory index.
+    /// </summary>
+    /// <param name="progress">Progress callback receiving (current, total, current entity).</param>
+    /// <param name="cancellationToken">Allows canceling a long-running validation.</param>
+    /// <returns>List of entities considered broken or missing.</returns>
     public Task<List<FileCacheEntity>> ValidateLocalIntegrity(IProgress<(int, int, FileCacheEntity)> progress, CancellationToken cancellationToken)
     {
         _mareMediator.Publish(new HaltScanMessage(nameof(ValidateLocalIntegrity)));
@@ -135,11 +214,17 @@ public sealed class FileCacheManager : IHostedService
         return Task.FromResult(brokenEntities);
     }
 
+    /// <summary>
+    /// Returns the expected full path in the cache for a content hash and file extension.
+    /// </summary>
     public string GetCacheFilePath(string hash, string extension)
     {
         return Path.Combine(_configService.Current.CacheFolder, hash + "." + extension);
     }
 
+    /// <summary>
+    /// Loads the file by hash and returns a high-compression LZ4-wrapped copy of its bytes.
+    /// </summary>
     public async Task<(string, byte[])> GetCompressedFileData(string fileHash, CancellationToken uploadToken)
     {
         var fileCache = GetFileCacheByHash(fileHash)!.ResolvedFilepath;
@@ -147,6 +232,10 @@ public sealed class FileCacheManager : IHostedService
             (int)new FileInfo(fileCache).Length));
     }
 
+    /// <summary>
+    /// Returns the preferred file entry for a given hash, prioritizing Penumbra-backed paths.
+    /// Returns null if none are valid after validation.
+    /// </summary>
     public FileCacheEntity? GetFileCacheByHash(string hash)
     {
         if (_fileCaches.TryGetValue(hash, out var hashes))
@@ -174,6 +263,10 @@ public sealed class FileCacheManager : IHostedService
         return validatedCacheEntry;
     }
 
+    /// <summary>
+    /// Resolves catalog entries for a list of file paths (Penumbra or cache), normalizing prefixes and
+    /// creating entries for unknown paths when possible.
+    /// </summary>
     public Dictionary<string, FileCacheEntity?> GetFileCachesByPaths(string[] paths)
     {
         _getCachesByPathsSemaphore.Wait();
@@ -218,6 +311,10 @@ public sealed class FileCacheManager : IHostedService
         }
     }
 
+    /// <summary>
+    /// Removes an entry from the in-memory index for the given hash and prefixed path.
+    /// Does not delete the file from disk.
+    /// </summary>
     public void RemoveHashedFile(string hash, string prefixedFilePath)
     {
         if (_fileCaches.TryGetValue(hash, out var caches))
@@ -232,6 +329,10 @@ public sealed class FileCacheManager : IHostedService
         }
     }
 
+    /// <summary>
+    /// Revalidates a file on disk and updates its catalog entry (size, timestamp, hash as needed),
+    /// replacing any prior entry for this path under the old hash.
+    /// </summary>
     public void UpdateHashedFile(FileCacheEntity fileCache, bool computeProperties = true)
     {
         _logger.LogTrace("Updating hash for {path}", fileCache.ResolvedFilepath);
@@ -249,6 +350,10 @@ public sealed class FileCacheManager : IHostedService
         AddHashedFile(fileCache);
     }
 
+    /// <summary>
+    /// Classifies a catalog entry against the current filesystem state, returning a tuple that
+    /// indicates whether the file is valid, requires an update (timestamp changed), or should be removed.
+    /// </summary>
     public (FileState State, FileCacheEntity FileCache) ValidateFileCacheEntity(FileCacheEntity fileCache)
     {
         fileCache = ReplacePathPrefixes(fileCache);
@@ -265,6 +370,10 @@ public sealed class FileCacheManager : IHostedService
         return (FileState.Valid, fileCache);
     }
 
+    /// <summary>
+    /// Writes the entire in-memory catalog to the CSV file atomically. Creates a .bak first and
+    /// replaces the main file upon success to avoid partial writes.
+    /// </summary>
     public void WriteOutFullCsv()
     {
         lock (_fileWriteLock)
@@ -292,6 +401,10 @@ public sealed class FileCacheManager : IHostedService
         }
     }
 
+    /// <summary>
+    /// Migrates a cache file with a raw hash-filename to a hash-with-extension form (e.g. .mtrl),
+    /// ensuring the catalog reflects the new path. On failure, the original entry is restored.
+    /// </summary>
     internal FileCacheEntity MigrateFileHashToExtension(FileCacheEntity fileCache, string ext)
     {
         try
@@ -381,6 +494,10 @@ public sealed class FileCacheManager : IHostedService
         return fileCache;
     }
 
+    /// <summary>
+    /// Initializes the manager by restoring the persisted CSV catalog. Automatically rolls forward
+    /// a .bak if present and the main file is missing or locked.
+    /// </summary>
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting FileCacheManager");
@@ -501,6 +618,9 @@ public sealed class FileCacheManager : IHostedService
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Persists the catalog to disk on service stop.
+    /// </summary>
     public Task StopAsync(CancellationToken cancellationToken)
     {
         WriteOutFullCsv();
