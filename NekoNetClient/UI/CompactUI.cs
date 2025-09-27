@@ -210,7 +210,7 @@ public class CompactUi : WindowMediatorSubscriberBase
             var penumAvailable = _ipcManager.Penumbra.APIAvailable;
             var glamAvailable = _ipcManager.Glamourer.APIAvailable;
 
-            UiSharedService.ColorTextWrapped($"One or more Plugins essential for Mare operation are unavailable. Enable or update following plugins:", ImGuiColors.DalamudRed);
+            UiSharedService.ColorTextWrapped($"One or more plugins essential for Neko-Net operation are unavailable. Enable or update the following plugins:", ImGuiColors.DalamudRed);
             using var indent = ImRaii.PushIndent(10f);
             if (!penumAvailable)
             {
@@ -283,6 +283,10 @@ public class CompactUi : WindowMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Renders the scrollable pairs section by drawing all configured folders returned from
+    /// <see cref="GetDrawFolders"/> and fits the content height around the transfers section.
+    /// </summary>
     private void DrawPairs()
     {
         var ySize = _transferPartHeight == 0
@@ -300,6 +304,10 @@ public class CompactUi : WindowMediatorSubscriberBase
         ImGui.EndChild();
     }
 
+    /// <summary>
+    /// Draws the server status block including the inline server picker, online user count,
+    /// shard indicator, and a connect/disconnect button reflecting the current state.
+    /// </summary>
     private void DrawServerStatus()
     {
         // ▼ NEW: server picker and current service label at the top of the status block
@@ -381,6 +389,9 @@ public class CompactUi : WindowMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Displays aggregate upload and download progress across all active transfers.
+    /// </summary>
     private void DrawTransfers()
     {
         var currentUploads = _fileTransferManager.CurrentUploads.ToList();
@@ -436,6 +447,10 @@ public class CompactUi : WindowMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Renders the UID header line: current display name (or state text when disconnected),
+    /// and optionally the raw UID. Values are copyable to the clipboard on click.
+    /// </summary>
     private void DrawUIDHeader()
     {
         var uidText = GetUidText();
@@ -473,6 +488,11 @@ public class CompactUi : WindowMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Builds and returns the list of folder sections to render in the pairs area. Applies
+    /// filtering (search term, visibility, groups, tags, offline) and sorting according to
+    /// current configuration and UI state.
+    /// </summary>
     private IEnumerable<IDrawFolder> GetDrawFolders()
     {
         List<IDrawFolder> drawFolders = [];
@@ -605,6 +625,10 @@ public class CompactUi : WindowMediatorSubscriberBase
 
         return drawFolders;
     }
+    /// <summary>
+    /// Computes a small visual indicator (glyph + color) representing a service's connection
+    /// state for use in the service chips.
+    /// </summary>
     private (string label, Vector4 color) ChipStateVisual(SyncService svc)
     {
         var st = _multiHub.GetState(svc);
@@ -617,6 +641,10 @@ public class CompactUi : WindowMediatorSubscriberBase
         };
     }
 
+    /// <summary>
+    /// Maps the current <see cref="ServerState"/> to a user-facing error/description string
+    /// displayed beneath the UID header when not connected.
+    /// </summary>
     private string GetServerError()
     {
         return _apiController.ServerState switch
@@ -635,11 +663,14 @@ public class CompactUi : WindowMediatorSubscriberBase
             ServerState.MultiChara => "Your Character Configuration has multiple characters configured with same name and world. You will not be able to connect until you fix this issue. Remove the duplicates from the configuration in Settings -> Service Settings -> Character Management and reconnect manually after.",
             ServerState.OAuthMisconfigured => "OAuth2 is enabled but not fully configured, verify in the Settings -> Service Settings that you have OAuth2 connected and, importantly, a UID assigned to your current character.",
             ServerState.OAuthLoginTokenStale => "Your OAuth2 login token is stale and cannot be used to renew. Go to the Settings -> Service Settings and unlink then relink your OAuth2 configuration.",
-            ServerState.NoAutoLogon => "This character has automatic login into Mare disabled. Press the connect button to connect to Mare.",
+            ServerState.NoAutoLogon => "This character has automatic login into Neko-Net disabled. Press the connect button to connect to Neko-Net.",
             _ => string.Empty
         };
     }
 
+    /// <summary>
+    /// Returns a color suitable for the UID header based on the current <see cref="ServerState"/>.
+    /// </summary>
     private Vector4 GetUidColor()
     {
         return _apiController.ServerState switch
@@ -662,6 +693,10 @@ public class CompactUi : WindowMediatorSubscriberBase
         };
     }
 
+    /// <summary>
+    /// Returns the header text to display (display name or a status label) based on the
+    /// current <see cref="ServerState"/>.
+    /// </summary>
     private string GetUidText()
     {
         return _apiController.ServerState switch
@@ -684,11 +719,17 @@ public class CompactUi : WindowMediatorSubscriberBase
         };
     }
 
+    /// <summary>
+    /// Re-open the window after leaving GPose if it was previously open.
+    /// </summary>
     private void UiSharedService_GposeEnd()
     {
         IsOpen = _wasOpen;
     }
 
+    /// <summary>
+    /// Close the window when entering GPose while remembering the previous state.
+    /// </summary>
     private void UiSharedService_GposeStart()
     {
         _wasOpen = IsOpen;
@@ -696,6 +737,10 @@ public class CompactUi : WindowMediatorSubscriberBase
     }
 
     // ▼ NEW: helpers for server picker + current service label
+    /// <summary>
+    /// Returns a normalized service label derived from the current API URL and endpoint,
+    /// formatted as host + path (ws/wss normalized to http/https).
+    /// </summary>
     private string GetCurrentServiceLabel()
     {
         var baseHttp = _serverManager.CurrentApiUrl
@@ -713,6 +758,10 @@ public class CompactUi : WindowMediatorSubscriberBase
         return $"{host}{path}";
     }
 
+    /// <summary>
+    /// Draws the inline server picker combo and the current service label (click-to-copy).
+    /// Triggers a connection refresh upon selection.
+    /// </summary>
     private void DrawServerPickerInline()
     {
         var serverNames = _serverManager.GetServerNames();
@@ -769,6 +818,9 @@ public class CompactUi : WindowMediatorSubscriberBase
     }
 
     // ▼ NEW: chips, toggles, and helpers
+    /// <summary>
+    /// Draws the row of service chips to attach/detach additional services from the main UI.
+    /// </summary>
     private void DrawServiceChipsRow()
     {
         DrawServiceChip(SyncService.NekoNet, "NekoNet");
@@ -778,6 +830,10 @@ public class CompactUi : WindowMediatorSubscriberBase
         DrawServiceChip(SyncService.TeraSync, "TeraSync");
     }
 
+    /// <summary>
+    /// Draws a pill-style toggle for a specific service with a small state indicator and
+    /// tooltip. Clicking toggles the attachment state.
+    /// </summary>
     private void DrawServiceChip(SyncService svc, string label)
     {
         using (ImRaii.PushId(label))
@@ -818,6 +874,12 @@ public class CompactUi : WindowMediatorSubscriberBase
     }
 
 
+    /// <summary>
+    /// Toggles the attachment of a given service by connecting or disconnecting via the
+    /// <see cref="MultiHubManager"/>. Requires the main session to be connected when attaching.
+    /// </summary>
+    /// <param name="svc">Service to toggle.</param>
+    /// <param name="attach">True to attach (connect), false to detach (disconnect).</param>
     private async void ToggleService(SyncService svc, bool attach)
     {
         try
@@ -848,5 +910,8 @@ public class CompactUi : WindowMediatorSubscriberBase
     }
 
 
+    /// <summary>
+    /// Returns whether the given service is currently attached in the Compact UI.
+    /// </summary>
     private bool IsAttached(SyncService svc) => _attachedServices.Contains(svc);
 }

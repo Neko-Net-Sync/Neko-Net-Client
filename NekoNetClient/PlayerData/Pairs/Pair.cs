@@ -53,6 +53,15 @@ public class Pair
     private volatile bool _isApplying = false;
     private volatile bool _deferCleanupOnce = false;
 
+    /// <summary>
+    /// Creates a new pair representation for the provided user.
+    /// </summary>
+    /// <param name="logger">Logger for diagnostics.</param>
+    /// <param name="userPair">Full pair DTO including permissions and groups.</param>
+    /// <param name="cachedPlayerFactory">Factory to create the runtime <see cref="PlayerData.Handlers.PairHandler"/>.</param>
+    /// <param name="mediator">Mediator for publishing UI and state events.</param>
+    /// <param name="serverConfigurationManager">Configuration reference for notes/tags.</param>
+    /// <param name="apiUrlOverride">Optional service API URL override for service-scoped behavior.</param>
     public Pair(ILogger<Pair> logger, UserFullPairDto userPair, PairHandlerFactory cachedPlayerFactory,
         MareMediator mediator, ServerConfigurationManager serverConfigurationManager, string? apiUrlOverride = null)
     {
@@ -87,7 +96,13 @@ public class Pair
     public CharacterData? LastReceivedCharacterData { get; set; }
     public string? PlayerName => CachedPlayer?.PlayerName ?? string.Empty;
     public long LastAppliedDataBytes => CachedPlayer?.LastAppliedDataBytes ?? -1;
+    /// <summary>
+    /// Last applied triangle count estimate for recent data (-1 when unknown).
+    /// </summary>
     public long LastAppliedDataTris { get; set; } = -1;
+    /// <summary>
+    /// Last applied approximate VRAM usage for recent data (-1 when unknown).
+    /// </summary>
     public long LastAppliedApproximateVRAMBytes { get; set; } = -1;
     public string Ident => _onlineUserIdentDto?.Ident ?? string.Empty;
 

@@ -23,6 +23,10 @@ using System.Collections.Generic;
 
 namespace NekoNetClient.Services.ServerConfiguration;
 
+/// <summary>
+/// Central coordinator for server configuration, authentication, per-server notes/tags,
+/// and API base routing. Provides convenience helpers for UI and service-scoped views.
+/// </summary>
 public class ServerConfigurationManager
 {
     private readonly ServerConfigService _configService;
@@ -34,6 +38,10 @@ public class ServerConfigurationManager
     private readonly NotesConfigService _notesConfig;
     private readonly ServerTagConfigService _serverTagConfig;
 
+    /// <summary>
+    /// Creates a new <see cref="ServerConfigurationManager"/>.
+    /// Ensures the primary server entry exists.
+    /// </summary>
     public ServerConfigurationManager(ILogger<ServerConfigurationManager> logger, ServerConfigService configService,
         ServerTagConfigService serverTagConfig, NotesConfigService notesConfig, DalamudUtilService dalamudUtil,
         MareConfigService mareConfigService, HttpClient httpClient, MareMediator mareMediator)
@@ -48,6 +56,11 @@ public class ServerConfigurationManager
         _mareMediator = mareMediator;
         EnsureMainExists();
     }
+    /// <summary>
+    /// Maps a server URI's domain to the expected API endpoint base path.
+    /// </summary>
+    /// <param name="serverUri">Full server URI (ws/wss/http/https).</param>
+    /// <returns>API base path starting with '/'.</returns>
     public string GetApiEndpointForDomain(string serverUri)
     {
         try
@@ -69,8 +82,13 @@ public class ServerConfigurationManager
             return "/mare";
         }
     }
+    /// <summary>Gets the currently selected server API URL.</summary>
     public string CurrentApiUrl => CurrentServer.ServerUri;
+    /// <summary>Gets the currently selected server configuration.</summary>
     public ServerStorage CurrentServer => _configService.Current.ServerStorage[CurrentServerIndex];
+    /// <summary>
+    /// Whether census/telemetry is enabled. Changing this value persists the setting.
+    /// </summary>
     public bool SendCensusData
     {
         get
@@ -84,6 +102,9 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>
+    /// Tracks whether the census opt-in UI has been shown to the user.
+    /// </summary>
     public bool ShownCensusPopup
     {
         get
@@ -97,6 +118,9 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>
+    /// Gets or sets the current server index. Setting persists the selection.
+    /// </summary>
     public int CurrentServerIndex
     {
         set
@@ -116,6 +140,11 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>
+    /// Retrieves the OAuth token and UID for the current character on the specified server index.
+    /// Returns null if not configured or ambiguous. Sets <paramref name="hasMulti"/> when multiple
+    /// identical character entries exist, prompting the UI to resolve the ambiguity.
+    /// </summary>
     public (string OAuthToken, string UID)? GetOAuth2(out bool hasMulti, int serverIdx = -1)
     {
         ServerStorage? currentServer;
@@ -163,6 +192,11 @@ public class ServerConfigurationManager
         return null;
     }
 
+    /// <summary>
+    /// Retrieves the configured secret key for the current character on the specified server index.
+    /// Returns null if not configured or ambiguous. Sets <paramref name="hasMulti"/> when multiple
+    /// identical character entries exist.
+    /// </summary>
     public string? GetSecretKey(out bool hasMulti, int serverIdx = -1)
     {
         ServerStorage? currentServer;
@@ -222,18 +256,25 @@ public class ServerConfigurationManager
         return null;
     }
 
+    /// <summary>Returns the list of configured server API URLs.</summary>
     public string[] GetServerApiUrls()
     {
         return _configService.Current.ServerStorage.Select(v => v.ServerUri).ToArray();
     }
 
     // Expose servers for UI (read-only)
+    /// <summary>Exposes all configured servers as a read-only list for UI.</summary>
     public IReadOnlyList<ServerStorage> GetAllServers() => _configService.Current.ServerStorage;
 
+    /// <summary>Returns the number of configured servers.</summary>
     public int GetServerCount() => _configService.Current.ServerStorage.Count;
 
     // Server profiles UI removed; legacy storage retained in config but not used at runtime
 
+    /// <summary>
+    /// Returns the server at the given index. If the index is invalid, selects index 0
+    /// and ensures the main server exists.
+    /// </summary>
     public ServerStorage GetServerByIndex(int idx)
     {
         try
@@ -248,6 +289,10 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>
+    /// Extracts the Discord user ID from the configured OAuth token for the given server.
+    /// Returns empty string when not available and resets invalid tokens.
+    /// </summary>
     public string GetDiscordUserFromToken(ServerStorage server)
     {
         JwtSecurityTokenHandler handler = new JwtSecurityTokenHandler();
@@ -266,16 +311,19 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>Returns the configured server display names.</summary>
     public string[] GetServerNames()
     {
         return _configService.Current.ServerStorage.Select(v => v.ServerName).ToArray();
     }
 
+    /// <summary>Checks if the current server has at least one authentication entry.</summary>
     public bool HasValidConfig()
     {
         return CurrentServer != null && CurrentServer.Authentications.Count > 0;
     }
 
+    /// <summary>Persists configuration changes and logs the caller for diagnostics.</summary>
     public void Save()
     {
         var caller = new StackTrace().GetFrame(1)?.GetMethod()?.ReflectedType?.Name ?? "Unknown";
@@ -283,6 +331,10 @@ public class ServerConfigurationManager
         _configService.Save();
     }
 
+    /// <summary>
+    /// Selects the server at the given index, ensures API endpoint is populated based on host,
+    /// clears FullPause, and persists changes.
+    /// </summary>
     public void SelectServer(int idx)
     {
         _configService.Current.CurrentServer = idx;
@@ -300,6 +352,10 @@ public class ServerConfigurationManager
         Save();
     }
 
+    /// <summary>
+    /// Adds the current Dalamud character as an authentication entry to the selected server index.
+    /// No-op if an entry already exists.
+    /// </summary>
     internal void AddCurrentCharacterToServer(int serverSelectionIndex = -1)
     {
         if (serverSelectionIndex == -1) serverSelectionIndex = CurrentServerIndex;
@@ -318,6 +374,10 @@ public class ServerConfigurationManager
         Save();
     }
 
+    /// <summary>
+    /// Adds an empty authentication entry to the server at the provided index.
+    /// Used by UI to prepare selection before character details are known.
+    /// </summary>
     internal void AddEmptyCharacterToServer(int serverSelectionIndex)
     {
         var server = GetServerByIndex(serverSelectionIndex);
@@ -328,18 +388,21 @@ public class ServerConfigurationManager
         Save();
     }
 
+    /// <summary>Adds a tag to the Open Pair filter list for the current server.</summary>
     internal void AddOpenPairTag(string tag)
     {
         CurrentServerTagStorage().OpenPairTags.Add(tag);
         _serverTagConfig.Save();
     }
 
+    /// <summary>Adds a new server to the configuration and persists.</summary>
     internal void AddServer(ServerStorage serverStorage)
     {
         _configService.Current.ServerStorage.Add(serverStorage);
         Save();
     }
 
+    /// <summary>Adds a tag to the current server's available pair tags and refreshes the UI.</summary>
     internal void AddTag(string tag)
     {
         CurrentServerTagStorage().ServerAvailablePairTags.Add(tag);
@@ -348,6 +411,7 @@ public class ServerConfigurationManager
     }
 
     // Per-API helpers for tags (used by per-service tabs)
+    /// <summary>Per-API variant of <see cref="AddTag"/> used by multi-service views.</summary>
     internal void AddTagForApiUrl(string apiUrl, string tag)
     {
         var storage = ServerTagStorageForUrl(apiUrl);
@@ -356,6 +420,7 @@ public class ServerConfigurationManager
         _mareMediator.Publish(new RefreshUiMessage());
     }
 
+    /// <summary>Adds a tag to a specific UID on the current server and refreshes UI.</summary>
     internal void AddTagForUid(string uid, string tagName)
     {
         if (CurrentServerTagStorage().UidServerPairedUserTags.TryGetValue(uid, out var tags))
@@ -371,6 +436,7 @@ public class ServerConfigurationManager
         _serverTagConfig.Save();
     }
 
+    /// <summary>Per-API variant of <see cref="AddTagForUid"/> used by service-scoped views.</summary>
     internal void AddTagForUidForApiUrl(string apiUrl, string uid, string tagName, bool save = true)
     {
         var storage = ServerTagStorageForUrl(apiUrl);
@@ -387,11 +453,13 @@ public class ServerConfigurationManager
         if (save) _serverTagConfig.Save();
     }
 
+    /// <summary>Returns true if the given tag is in the Open Pair filter list.</summary>
     internal bool ContainsOpenPairTag(string tag)
     {
         return CurrentServerTagStorage().OpenPairTags.Contains(tag);
     }
 
+    /// <summary>Returns true if the UID has the specified tag on the current server.</summary>
     internal bool ContainsTag(string uid, string tag)
     {
         if (CurrentServerTagStorage().UidServerPairedUserTags.TryGetValue(uid, out var tags))
@@ -402,6 +470,7 @@ public class ServerConfigurationManager
         return false;
     }
 
+    /// <summary>Removes the server from configuration and adjusts the selected index if needed.</summary>
     internal void DeleteServer(ServerStorage selectedServer)
     {
         if (Array.IndexOf(_configService.Current.ServerStorage.ToArray(), selectedServer) <
@@ -414,6 +483,7 @@ public class ServerConfigurationManager
         Save();
     }
 
+    /// <summary>Gets the note for a group ID on the current server, if any.</summary>
     internal string? GetNoteForGid(string gID)
     {
         if (CurrentNotesStorage().GidServerComments.TryGetValue(gID, out var note))
@@ -425,6 +495,7 @@ public class ServerConfigurationManager
         return null;
     }
 
+    /// <summary>Gets the note for a UID on the current server, if any.</summary>
     internal string? GetNoteForUid(string uid)
     {
         if (CurrentNotesStorage().UidServerComments.TryGetValue(uid, out var note))
@@ -436,6 +507,7 @@ public class ServerConfigurationManager
     }
 
     // Per-URL variants used for multi-service views
+    /// <summary>Per-URL variant of <see cref="GetNoteForUid"/> for multi-service views.</summary>
     internal string? GetNoteForUidForApiUrl(string apiUrl, string uid)
     {
         var storage = ServerNotesStorageForUrl(apiUrl);
@@ -448,6 +520,7 @@ public class ServerConfigurationManager
     }
 
     // Per-URL setter used by service-scoped views/rows
+    /// <summary>Per-URL setter for UID note used by service-scoped views.</summary>
     internal void SetNoteForUidForApiUrl(string apiUrl, string uid, string note, bool save = true)
     {
         if (string.IsNullOrEmpty(uid)) return;
@@ -456,37 +529,44 @@ public class ServerConfigurationManager
         if (save) _notesConfig.Save();
     }
 
+    /// <summary>Gets the available pair tags for the current server.</summary>
     internal HashSet<string> GetServerAvailablePairTags()
     {
         return CurrentServerTagStorage().ServerAvailablePairTags;
     }
 
+    /// <summary>Per-URL variant of <see cref="GetServerAvailablePairTags"/>.</summary>
     internal HashSet<string> GetServerAvailablePairTagsForApiUrl(string apiUrl)
     {
         return ServerTagStorageForUrl(apiUrl).ServerAvailablePairTags;
     }
 
+    /// <summary>Gets the UID → tags mapping for the current server.</summary>
     internal Dictionary<string, List<string>> GetUidServerPairedUserTags()
     {
         return CurrentServerTagStorage().UidServerPairedUserTags;
     }
 
+    /// <summary>Per-URL variant of <see cref="GetUidServerPairedUserTags"/>.</summary>
     internal Dictionary<string, List<string>> GetUidServerPairedUserTagsForApiUrl(string apiUrl)
     {
         return ServerTagStorageForUrl(apiUrl).UidServerPairedUserTags;
     }
 
+    /// <summary>Gets the set of UIDs that have the given tag on the current server.</summary>
     internal HashSet<string> GetUidsForTag(string tag)
     {
         return CurrentServerTagStorage().UidServerPairedUserTags.Where(p => p.Value.Contains(tag, StringComparer.Ordinal)).Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
     }
 
+    /// <summary>Per-URL variant of <see cref="GetUidsForTag"/>.</summary>
     internal HashSet<string> GetUidsForTagForApiUrl(string apiUrl, string tag)
     {
         var storage = ServerTagStorageForUrl(apiUrl);
         return storage.UidServerPairedUserTags.Where(p => p.Value.Contains(tag, StringComparer.Ordinal)).Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
     }
 
+    /// <summary>Returns true if the UID has any tags on the current server.</summary>
     internal bool HasTags(string uid)
     {
         if (CurrentServerTagStorage().UidServerPairedUserTags.TryGetValue(uid, out var tags))
@@ -497,6 +577,7 @@ public class ServerConfigurationManager
         return false;
     }
 
+    /// <summary>Per-URL variant of <see cref="HasTags"/>.</summary>
     internal bool HasTagsForApiUrl(string apiUrl, string uid)
     {
         var storage = ServerTagStorageForUrl(apiUrl);
@@ -507,12 +588,14 @@ public class ServerConfigurationManager
         return false;
     }
 
+    /// <summary>Per-URL check whether a UID has a given tag.</summary>
     internal bool ContainsTagForApiUrl(string apiUrl, string uid, string tagName)
     {
         var storage = ServerTagStorageForUrl(apiUrl);
         return storage.UidServerPairedUserTags.TryGetValue(uid, out var tags) && tags.Contains(tagName, StringComparer.Ordinal);
     }
 
+    /// <summary>Removes the given authentication entry from the server at index.</summary>
     internal void RemoveCharacterFromServer(int serverSelectionIndex, Authentication item)
     {
         var server = GetServerByIndex(serverSelectionIndex);
@@ -520,12 +603,14 @@ public class ServerConfigurationManager
         Save();
     }
 
+    /// <summary>Removes a tag from the Open Pair filter list.</summary>
     internal void RemoveOpenPairTag(string tag)
     {
         CurrentServerTagStorage().OpenPairTags.Remove(tag);
         _serverTagConfig.Save();
     }
 
+    /// <summary>Removes a tag globally and from all UIDs on the current server.</summary>
     internal void RemoveTag(string tag)
     {
         CurrentServerTagStorage().ServerAvailablePairTags.Remove(tag);
@@ -537,6 +622,7 @@ public class ServerConfigurationManager
         _mareMediator.Publish(new RefreshUiMessage());
     }
 
+    /// <summary>Per-URL variant of <see cref="RemoveTag"/>.</summary>
     internal void RemoveTagForApiUrl(string apiUrl, string tag)
     {
         var storage = ServerTagStorageForUrl(apiUrl);
@@ -549,6 +635,7 @@ public class ServerConfigurationManager
         _mareMediator.Publish(new RefreshUiMessage());
     }
 
+    /// <summary>Removes a tag from a specific UID on the current server.</summary>
     internal void RemoveTagForUid(string uid, string tagName, bool save = true)
     {
         if (CurrentServerTagStorage().UidServerPairedUserTags.TryGetValue(uid, out var tags))
@@ -563,6 +650,7 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>Per-URL variant of <see cref="RemoveTagForUid"/>.</summary>
     internal void RemoveTagForUidForApiUrl(string apiUrl, string uid, string tagName, bool save = true)
     {
         var storage = ServerTagStorageForUrl(apiUrl);
@@ -577,6 +665,7 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>Renames a tag across the current server and updates all UID mappings.</summary>
     internal void RenameTag(string oldName, string newName)
     {
         CurrentServerTagStorage().ServerAvailablePairTags.Remove(oldName);
@@ -588,11 +677,13 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>Persists note changes to disk.</summary>
     internal void SaveNotes()
     {
         _notesConfig.Save();
     }
 
+    /// <summary>Sets the note for a group on the current server.</summary>
     internal void SetNoteForGid(string gid, string note, bool save = true)
     {
         if (string.IsNullOrEmpty(gid)) return;
@@ -602,6 +693,7 @@ public class ServerConfigurationManager
             _notesConfig.Save();
     }
 
+    /// <summary>Sets the note for a user on the current server.</summary>
     internal void SetNoteForUid(string uid, string note, bool save = true)
     {
         if (string.IsNullOrEmpty(uid)) return;
@@ -611,6 +703,10 @@ public class ServerConfigurationManager
             _notesConfig.Save();
     }
 
+    /// <summary>
+    /// Automatically populates an empty note for a UID from character name when enabled in settings.
+    /// No-op when a note already exists.
+    /// </summary>
     internal void AutoPopulateNoteForUid(string uid, string note)
     {
         if (!_mareConfigService.Current.AutoPopulateEmptyNotesFromCharaName
@@ -675,6 +771,9 @@ public class ServerConfigurationManager
         return _serverTagConfig.Current.ServerTagStorage[apiUrl];
     }
 
+    /// <summary>
+    /// Queries the server for the mapping of UID → Discord user using the provided OAuth token.
+    /// </summary>
     public async Task<Dictionary<string, string>> GetUIDsWithDiscordToken(string serverUri, string token)
     {
         try
@@ -693,6 +792,9 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>
+    /// Checks whether the server supports Discord OAuth and returns the authorization endpoint when available.
+    /// </summary>
     public async Task<Uri?> CheckDiscordOAuth(string serverUri)
     {
         try
@@ -709,6 +811,10 @@ public class ServerConfigurationManager
         }
     }
 
+    /// <summary>
+    /// Opens the browser for Discord auth and polls the server for the resulting token.
+    /// Returns null on timeout or error.
+    /// </summary>
     public async Task<string?> GetDiscordOAuthToken(Uri discordAuthUri, string serverUri, CancellationToken token)
     {
         var sessionId = BitConverter.ToString(RandomNumberGenerator.GetBytes(64)).Replace("-", "").ToLower();
@@ -737,11 +843,13 @@ public class ServerConfigurationManager
         return discordToken;
     }
 
+    /// <summary>Gets the preferred HTTP transport for SignalR connections.</summary>
     public HttpTransportType GetTransport()
     {
         return CurrentServer.HttpTransportType;
     }
 
+    /// <summary>Sets the preferred HTTP transport for SignalR and persists the change.</summary>
     public void SetTransportType(HttpTransportType httpTransportType)
     {
         CurrentServer.HttpTransportType = httpTransportType;

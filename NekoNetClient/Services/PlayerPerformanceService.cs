@@ -18,6 +18,10 @@ using NekoNetClient.Utils;
 
 namespace NekoNetClient.Services;
 
+/// <summary>
+/// Evaluates incoming character data against user-configured triangle and VRAM thresholds, optionally
+/// auto-pausing pairs and publishing warnings/notifications when limits are exceeded.
+/// </summary>
 public class PlayerPerformanceService
 {
     private readonly FileCacheManager _fileCacheManager;
@@ -27,6 +31,14 @@ public class PlayerPerformanceService
     private readonly PlayerPerformanceConfigService _playerPerformanceConfigService;
     private readonly Dictionary<string, bool> _warnedForPlayers = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PlayerPerformanceService"/>.
+    /// </summary>
+    /// <param name="logger">Logger for diagnostics and debug traces.</param>
+    /// <param name="mediator">Mediator used to publish events and notifications.</param>
+    /// <param name="playerPerformanceConfigService">Configuration containing thresholds and behavior flags.</param>
+    /// <param name="fileCacheManager">Access to file cache for computing VRAM impact.</param>
+    /// <param name="xivDataAnalyzer">Analyzer to compute triangle counts by model hash.</param>
     public PlayerPerformanceService(ILogger<PlayerPerformanceService> logger, MareMediator mediator,
         PlayerPerformanceConfigService playerPerformanceConfigService, FileCacheManager fileCacheManager,
         XivDataAnalyzer xivDataAnalyzer)
@@ -38,6 +50,13 @@ public class PlayerPerformanceService
         _xivDataAnalyzer = xivDataAnalyzer;
     }
 
+    /// <summary>
+    /// Runs VRAM and triangle checks in order, publishing warnings and possibly pausing the pair if any
+    /// configured auto-pause thresholds are exceeded.
+    /// </summary>
+    /// <param name="pairHandler">Pair handler representing the player/pair under evaluation.</param>
+    /// <param name="charaData">The received character data.</param>
+    /// <returns>False if an auto-pause occurred, otherwise true.</returns>
     public async Task<bool> CheckBothThresholds(PairHandler pairHandler, CharacterData charaData)
     {
         var config = _playerPerformanceConfigService.Current;
@@ -108,6 +127,13 @@ public class PlayerPerformanceService
         return true;
     }
 
+    /// <summary>
+    /// Computes triangle count usage from modded model hashes and applies auto-pause/notifications if
+    /// thresholds are exceeded.
+    /// </summary>
+    /// <param name="pairHandler">The pair being evaluated.</param>
+    /// <param name="charaData">Character data containing file replacements.</param>
+    /// <returns>False if auto-pause was triggered; otherwise true.</returns>
     public async Task<bool> CheckTriangleUsageThresholds(PairHandler pairHandler, CharacterData charaData)
     {
         var config = _playerPerformanceConfigService.Current;
@@ -163,6 +189,14 @@ public class PlayerPerformanceService
         return true;
     }
 
+    /// <summary>
+    /// Approximates VRAM usage by summing sizes of texture files involved and applies auto-pause/notifications
+    /// when thresholds are exceeded.
+    /// </summary>
+    /// <param name="pairHandler">The pair being evaluated.</param>
+    /// <param name="charaData">Character data containing file replacements.</param>
+    /// <param name="toDownloadFiles">Optional list of pending downloads to obtain file sizes without disk lookup.</param>
+    /// <returns>False if auto-pause was triggered; otherwise true.</returns>
     public bool ComputeAndAutoPauseOnVRAMUsageThresholds(PairHandler pairHandler, CharacterData charaData, List<DownloadFileTransfer> toDownloadFiles)
     {
         var config = _playerPerformanceConfigService.Current;
@@ -239,6 +273,10 @@ public class PlayerPerformanceService
         return true;
     }
 
+    /// <summary>
+    /// Helper that determines whether the given value exceeds the threshold, considering configuration flags
+    /// for preferred-permission users.
+    /// </summary>
     private static bool CheckForThreshold(bool thresholdEnabled, long threshold, long value, bool checkForPrefPerm, bool isPrefPerm) =>
         thresholdEnabled && threshold > 0 && threshold < value && ((checkForPrefPerm && isPrefPerm) || !isPrefPerm);
 }

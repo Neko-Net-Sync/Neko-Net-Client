@@ -1,10 +1,21 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿//
+// NekoNetClient — Services.Events.EventAggregator
+// ------------------------------------------------------------
+// Purpose:
+//   Collects Event messages, maintains a rolling in-memory list, and persists them to disk
+//   with daily log rotation. Exposes a Lazy list for UI consumption with cheap refresh checks.
+//
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NekoNetClient.Services.Mediator;
 using NekoNetClient.Utils;
 
 namespace NekoNetClient.Services.Events;
 
+/// <summary>
+/// Aggregates <see cref="Event"/> messages published on the mediator, keeps a rolling in-memory
+/// buffer, and writes events to daily-rotated log files. Intended for UI and diagnostics.
+/// </summary>
 public class EventAggregator : MediatorSubscriberBase, IHostedService
 {
     private readonly RollingList<Event> _events = new(500);
@@ -12,12 +23,18 @@ public class EventAggregator : MediatorSubscriberBase, IHostedService
     private readonly string _configDirectory;
     private readonly ILogger<EventAggregator> _logger;
 
+    /// <summary>Lazy snapshot of current events; re-created on new event to signal UI refresh.</summary>
     public Lazy<List<Event>> EventList { get; private set; }
+    /// <summary>True when a new lazy snapshot should be requested by the UI.</summary>
     public bool NewEventsAvailable => !EventList.IsValueCreated;
+    /// <summary>Directory where event logs are stored.</summary>
     public string EventLogFolder => Path.Combine(_configDirectory, "eventlog");
     private string CurrentLogName => $"{DateTime.Now:yyyy-MM-dd}-events.log";
     private DateTime _currentTime;
 
+    /// <summary>
+    /// Subscribes to <see cref="EventMessage"/> and sets up rolling storage and log folder paths.
+    /// </summary>
     public EventAggregator(string configDirectory, ILogger<EventAggregator> logger, MareMediator mareMediator) : base(logger, mareMediator)
     {
         Mediator.Subscribe<EventMessage>(this, (msg) =>

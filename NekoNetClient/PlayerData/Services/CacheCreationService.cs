@@ -14,6 +14,11 @@ using NekoNetClient.Services.Mediator;
 
 namespace NekoNetClient.PlayerData.Services;
 
+/// <summary>
+/// Builds and maintains local character data caches for the player and related objects (pet, minion/mount, companion)
+/// by reacting to mediator messages (plugin changes, equipment/customization changes, zoning).
+/// Debounces bursts and ensures safe draw windows before invoking <see cref="PlayerDataFactory"/> to gather data.
+/// </summary>
 public sealed class CacheCreationService : DisposableMediatorSubscriberBase
 {
     private readonly SemaphoreSlim _cacheCreateLock = new(1);
@@ -161,6 +166,9 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
         _creationCts.Dispose();
     }
 
+    /// <summary>
+    /// Debounced request to create/update the cache for the specified object kind (defaults to player).
+    /// </summary>
     private void AddCacheToCreate(ObjectKind kind = ObjectKind.Player)
     {
         _debounceCts.Cancel();
@@ -185,6 +193,9 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
         });
     }
 
+    /// <summary>
+    /// Processes pending cache creation requests if not zoning and not drawing, then publishes the created data.
+    /// </summary>
     private void ProcessCacheCreation()
     {
         if (_isZoning || _haltCharaDataCreation) return;

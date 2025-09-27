@@ -1,4 +1,15 @@
-﻿using FFXIVClientStructs.FFXIV.Client.Game.Character;
+﻿/*
+     Neko-Net Client — PlayerData.Factories.PlayerDataFactory
+     ---------------------------------------------------------
+     Purpose
+     - Builds CharacterDataFragment instances from live game objects by querying IPC providers (Penumbra,
+         Glamourer, Customize+, Honorific, Heels, Moodles, PetNames) and resolving transient/static file paths.
+
+     Behavior
+     - Waits for safe draw windows, resolves and filters file replacements, computes hashes using the cache,
+         gathers customization data and validates animation skeleton bone indices for safety.
+*/
+using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data.Enum;
 using NekoNetClient.FileCache;
@@ -11,6 +22,10 @@ using NekoNetClient.Services.Mediator;
 
 namespace NekoNetClient.PlayerData.Factories;
 
+/// <summary>
+/// Produces <see cref="CharacterDataFragment"/> snapshots for characters, including file replacements and
+/// customization data, while respecting draw safety and validating PAP bone indices.
+/// </summary>
 public class PlayerDataFactory
 {
     private readonly DalamudUtilService _dalamudUtil;
@@ -22,6 +37,9 @@ public class PlayerDataFactory
     private readonly MareMediator _mareMediator;
     private readonly TransientResourceManager _transientResourceManager;
 
+    /// <summary>
+    /// Initializes a new instance of the factory with all required services.
+    /// </summary>
     public PlayerDataFactory(ILogger<PlayerDataFactory> logger, DalamudUtilService dalamudUtil, IpcManager ipcManager,
         TransientResourceManager transientResourceManager, FileCacheManager fileReplacementFactory,
         PerformanceCollectorService performanceCollector, XivDataAnalyzer modelAnalyzer, MareMediator mareMediator)
@@ -37,6 +55,10 @@ public class PlayerDataFactory
         _logger.LogTrace("Creating {this}", nameof(PlayerDataFactory));
     }
 
+    /// <summary>
+    /// Builds a <see cref="CharacterDataFragment"/> for the specified handler, or null if the object is not valid.
+    /// Throws if IPC dependencies are not initialized.
+    /// </summary>
     public async Task<CharacterDataFragment?> BuildCharacterData(GameObjectHandler playerRelatedObject, CancellationToken token)
     {
         if (!_ipcManager.Initialized)
@@ -91,16 +113,25 @@ public class PlayerDataFactory
         return null;
     }
 
+    /// <summary>
+    /// Checks on the framework thread whether the underlying draw object is null.
+    /// </summary>
     private async Task<bool> CheckForNullDrawObject(IntPtr playerPointer)
     {
         return await _dalamudUtil.RunOnFrameworkThread(() => CheckForNullDrawObjectUnsafe(playerPointer)).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Unsafe pointer-level check for a null draw object.
+    /// </summary>
     private unsafe bool CheckForNullDrawObjectUnsafe(IntPtr playerPointer)
     {
         return ((Character*)playerPointer)->GameObject.DrawObject == null;
     }
 
+    /// <summary>
+    /// Core routine gathering file replacements and customization for the object and returning a fragment.
+    /// </summary>
     private async Task<CharacterDataFragment> CreateCharacterData(GameObjectHandler playerRelatedObject, CancellationToken ct)
     {
         var objectKind = playerRelatedObject.ObjectKind;
@@ -262,6 +293,9 @@ public class PlayerDataFactory
         return fragment;
     }
 
+    /// <summary>
+    /// Verifies animation files against discovered skeleton bone indices; removes invalid animations.
+    /// </summary>
     private async Task VerifyPlayerAnimationBones(Dictionary<string, List<ushort>>? boneIndices, CharacterDataFragmentPlayer fragment, CancellationToken ct)
     {
         if (boneIndices == null) return;
@@ -325,6 +359,9 @@ public class PlayerDataFactory
         }
     }
 
+    /// <summary>
+    /// Resolves penumbra forward and reverse paths into a normalized mapping of file path to game paths.
+    /// </summary>
     private async Task<IReadOnlyDictionary<string, string[]>> GetFileReplacementsFromPaths(HashSet<string> forwardResolve, HashSet<string> reverseResolve)
     {
         var forwardPaths = forwardResolve.ToArray();
@@ -360,6 +397,9 @@ public class PlayerDataFactory
         return resolvedPaths.ToDictionary(k => k.Key, k => k.Value.ToArray(), StringComparer.OrdinalIgnoreCase).AsReadOnly();
     }
 
+    /// <summary>
+    /// Persists current semi-transient resources and returns those that still require resolution.
+    /// </summary>
     private HashSet<string> ManageSemiTransientData(ObjectKind objectKind)
     {
         _transientResourceManager.PersistTransientResources(objectKind);

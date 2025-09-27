@@ -1,3 +1,10 @@
+//
+// NekoNetClient — Services.Sync.SyncFacade
+// ------------------------------------------------------------
+// Purpose:
+//   Minimal façade implementation over ApiController and PairManager, exposing
+//   an event stream and a few simple queries for UI consumption.
+//
 using Microsoft.Extensions.Logging;
 using NekoNetClient.PlayerData.Pairs;
 using NekoNetClient.Services.Mediator;
@@ -11,12 +18,19 @@ using System.Threading.Tasks;
 
 namespace NekoNetClient.Services.Sync;
 
+/// <summary>
+/// Default <see cref="ISyncFacade"/> implementation that bridges hub state and pair data
+/// for a single service. Pushes connection events to an internal channel for consumers.
+/// </summary>
 public sealed class SyncFacade : DisposableMediatorSubscriberBase, ISyncFacade
 {
     private readonly ApiController _api;
     private readonly PairManager _pairs;
     private readonly Channel<SyncEvent> _events;
 
+    /// <summary>
+    /// Creates a new <see cref="SyncFacade"/> bound to a specific API controller and pair manager.
+    /// </summary>
     public SyncFacade(ILogger<SyncFacade> logger, MareMediator mediator, ApiController api, PairManager pairs)
         : base(logger, mediator)
     {
@@ -34,19 +48,23 @@ public sealed class SyncFacade : DisposableMediatorSubscriberBase, ISyncFacade
         Mediator.Subscribe<RefreshUiMessage>(this, _ => Enqueue(new SyncEvent(SyncEventKind.UiRefresh)));
     }
 
+    /// <inheritdoc />
     public bool IsReady => _api.IsConnected;
 
+    /// <inheritdoc />
     public async Task StartAsync(CancellationToken ct)
     {
         // ApiController manages its own internal cancellation; just start.
         await _api.CreateConnectionsAsync().ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
     public async Task StopAsync(CancellationToken ct)
     {
         await _api.StopConnectionsAsync().ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
     public async IAsyncEnumerable<SyncEvent> EventsAsync([EnumeratorCancellation] CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -66,6 +84,7 @@ public sealed class SyncFacade : DisposableMediatorSubscriberBase, ISyncFacade
         }
     }
 
+    /// <inheritdoc />
     public Task<IReadOnlyList<UserPairSummary>> GetPairsAsync(CancellationToken ct)
     {
         var list = _pairs.DirectPairs
@@ -75,6 +94,7 @@ public sealed class SyncFacade : DisposableMediatorSubscriberBase, ISyncFacade
         return Task.FromResult<IReadOnlyList<UserPairSummary>>(list);
     }
 
+    /// <inheritdoc />
     public Task<SyncStatus> GetStatusAsync(CancellationToken ct)
     {
         var si = _api.ServerInfo;

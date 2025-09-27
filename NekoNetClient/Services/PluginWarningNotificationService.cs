@@ -16,6 +16,10 @@ using System.Collections.Concurrent;
 
 namespace NekoNetClient.Services;
 
+/// <summary>
+/// Detects when received player data references optional plugins that are not installed locally and emits
+/// a single, consolidated warning per user to avoid notification spam.
+/// </summary>
 public class PluginWarningNotificationService
 {
     private readonly ConcurrentDictionary<UserData, OptionalPluginWarning> _cachedOptionalPluginWarnings = new(UserDataComparer.Instance);
@@ -23,6 +27,12 @@ public class PluginWarningNotificationService
     private readonly MareConfigService _mareConfigService;
     private readonly MareMediator _mediator;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PluginWarningNotificationService"/>.
+    /// </summary>
+    /// <param name="mareConfigService">Configuration to respect user preferences for optional warnings.</param>
+    /// <param name="ipcManager">Provides IPC access to determine plugin availability.</param>
+    /// <param name="mediator">Mediator used to publish consolidated warnings.</param>
     public PluginWarningNotificationService(MareConfigService mareConfigService, IpcManager ipcManager, MareMediator mediator)
     {
         _mareConfigService = mareConfigService;
@@ -30,6 +40,13 @@ public class PluginWarningNotificationService
         _mediator = mediator;
     }
 
+    /// <summary>
+    /// Publishes a single warning notification indicating which optional plugins are missing locally in
+    /// order to fully render data from the specified player.
+    /// </summary>
+    /// <param name="user">The user whose data triggered the check.</param>
+    /// <param name="playerName">Display name used for the notification text.</param>
+    /// <param name="changes">The set of changes present which may require optional plugins.</param>
     public void NotifyForMissingPlugins(UserData user, string playerName, HashSet<PlayerChanges> changes)
     {
         if (!_cachedOptionalPluginWarnings.TryGetValue(user, out var warning))

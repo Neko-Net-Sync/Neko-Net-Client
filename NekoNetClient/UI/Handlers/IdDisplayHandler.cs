@@ -1,4 +1,14 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿/*
+     Neko-Net Client — UI.Handlers.IdDisplayHandler
+     ----------------------------------------------
+     Purpose
+     - Responsible for rendering UID/name or GID/name text for pairs and groups with inline editing,
+         profile popouts, and toggling between ID and nickname.
+
+     Notes
+     - Uses ImGui for input and tooltips; stores per-entry state for edit fields and hover popup timings.
+*/
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using NekoNet.API.Dto.Group;
@@ -9,6 +19,10 @@ using NekoNetClient.Services.ServerConfiguration;
 
 namespace NekoNetClient.UI.Handlers;
 
+/// <summary>
+/// UI helper that renders pair and group identification text with inline nickname edit support
+/// and profile popout behavior based on hover duration.
+/// </summary>
 public class IdDisplayHandler
 {
     private readonly MareConfigService _mareConfigService;
@@ -22,6 +36,9 @@ public class IdDisplayHandler
     private bool _popupShown = false;
     private DateTime? _popupTime;
 
+    /// <summary>
+    /// Initializes a new handler for rendering ID displays and handling edits.
+    /// </summary>
     public IdDisplayHandler(MareMediator mediator, ServerConfigurationManager serverManager, MareConfigService mareConfigService)
     {
         _mediator = mediator;
@@ -29,6 +46,9 @@ public class IdDisplayHandler
         _mareConfigService = mareConfigService;
     }
 
+    /// <summary>
+    /// Renders group text (GID or nickname) with inline edit on right-click.
+    /// </summary>
     public void DrawGroupText(string id, GroupFullInfoDto group, float textPosX, Func<float> editBoxWidth)
     {
         ImGui.SameLine(textPosX);
@@ -85,6 +105,9 @@ public class IdDisplayHandler
         }
     }
 
+    /// <summary>
+    /// Renders pair text (UID or nickname), supports toggling, editing, and profile popup on hover.
+    /// </summary>
     public void DrawPairText(string id, Pair pair, float textPosX, Func<float> editBoxWidth)
     {
         ImGui.SameLine(textPosX);
@@ -177,6 +200,9 @@ public class IdDisplayHandler
         }
     }
 
+    /// <summary>
+    /// Computes the group display text and whether the raw GID is shown.
+    /// </summary>
     public (bool isGid, string text) GetGroupText(GroupFullInfoDto group)
     {
         var textIsGid = true;
@@ -201,6 +227,9 @@ public class IdDisplayHandler
         return (textIsGid, groupText!);
     }
 
+    /// <summary>
+    /// Computes the player display text and whether the raw UID is shown, honoring configuration preferences.
+    /// </summary>
     public (bool isUid, string text) GetPlayerText(Pair pair)
     {
         var textIsUid = true;
@@ -239,12 +268,18 @@ public class IdDisplayHandler
         return (textIsUid, playerText!);
     }
 
+    /// <summary>
+    /// Clears the current edit state.
+    /// </summary>
     internal void Clear()
     {
         _editEntry = string.Empty;
         _editComment = string.Empty;
     }
 
+    /// <summary>
+    /// Opens the profile window for the given pair.
+    /// </summary>
     internal void OpenProfile(Pair entry)
     {
         _mediator.Publish(new ProfileOpenStandaloneMessage(entry));

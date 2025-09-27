@@ -15,6 +15,15 @@ using NekoNetClient.UI;
 
 namespace NekoNetClient.Services;
 
+/// <summary>
+/// Central UI coordinator that wires mediator messages to window visibility, owns the WindowSystem,
+/// and integrates the global UI builder callbacks. Responsible for toggling primary windows based on
+/// configuration state and drawing both the window system and file dialogs each frame.
+/// </summary>
+/// <remarks>
+/// This service does not perform business logic; it focuses solely on UI orchestration, window lifecycle
+/// management, and mediator event hookup. Creation of individual windows is delegated to <see cref="UiFactory"/>.
+/// </remarks>
 public sealed class UiService : DisposableMediatorSubscriberBase
 {
     private readonly List<WindowMediatorSubscriberBase> _createdWindows = [];
@@ -25,6 +34,18 @@ public sealed class UiService : DisposableMediatorSubscriberBase
     private readonly WindowSystem _windowSystem;
     private readonly UiFactory _uiFactory;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="UiService"/> and registers window instances with the
+    /// provided <see cref="WindowSystem"/>, hooking into the global UI draw and open events.
+    /// </summary>
+    /// <param name="logger">Logger used for tracing lifecycle events.</param>
+    /// <param name="uiBuilder">Dalamud UI builder to attach draw and open handlers to.</param>
+    /// <param name="mareConfigService">Configuration provider to decide which primary window to open.</param>
+    /// <param name="windowSystem">Root window system which contains all windows.</param>
+    /// <param name="windows">Pre-created windows to register with the window system.</param>
+    /// <param name="uiFactory">Factory used to create on-demand windows (e.g., profile, permission, admin).</param>
+    /// <param name="fileDialogManager">Shared file dialog manager, drawn alongside the window system.</param>
+    /// <param name="mareMediator">Mediator used to subscribe/publish UI messages.</param>
     public UiService(ILogger<UiService> logger, IUiBuilder uiBuilder,
         MareConfigService mareConfigService, WindowSystem windowSystem,
         IEnumerable<WindowMediatorSubscriberBase> windows,
@@ -90,6 +111,10 @@ public sealed class UiService : DisposableMediatorSubscriberBase
         });
     }
 
+    /// <summary>
+    /// Toggles the main UI window. If the configuration is valid, shows the compact UI;
+    /// otherwise shows the introductory setup UI.
+    /// </summary>
     public void ToggleMainUi()
     {
         if (_mareConfigService.Current.HasValidSetup())
@@ -98,6 +123,10 @@ public sealed class UiService : DisposableMediatorSubscriberBase
             Mediator.Publish(new UiToggleMessage(typeof(IntroUi)));
     }
 
+    /// <summary>
+    /// Toggles the settings UI. If the configuration is valid, shows settings;
+    /// otherwise opens the introductory setup UI.
+    /// </summary>
     public void ToggleUi()
     {
         if (_mareConfigService.Current.HasValidSetup())
@@ -106,6 +135,11 @@ public sealed class UiService : DisposableMediatorSubscriberBase
             Mediator.Publish(new UiToggleMessage(typeof(IntroUi)));
     }
 
+    /// <summary>
+    /// Disposes the service, removing all windows from the <see cref="WindowSystem"/> and unhooking
+    /// builder callbacks. Also disposes any on-demand windows that were created during runtime.
+    /// </summary>
+    /// <param name="disposing">True when called from <c>Dispose()</c>; false when from a finalizer.</param>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
@@ -124,6 +158,9 @@ public sealed class UiService : DisposableMediatorSubscriberBase
         _uiBuilder.OpenMainUi -= ToggleMainUi;
     }
 
+    /// <summary>
+    /// Per-frame draw callback that renders the window system and any open file dialogs.
+    /// </summary>
     private void Draw()
     {
         _windowSystem.Draw();

@@ -1,4 +1,15 @@
-﻿using Microsoft.Extensions.Logging;
+﻿/*
+    Neko-Net Client — PlayerData.Pairs.VisibleUserDataDistributor
+    -------------------------------------------------------------
+    Purpose
+    - Pushes your character data to all visible, online users on the currently connected hub.
+    - Uploads missing files first, then sends the character data payload to recipients.
+
+    Behavior
+    - Listens for CharacterDataCreatedMessage and DelayedFrameworkUpdateMessage to detect new data or new visibility.
+    - Debounces uploads by tracking the last data hash and only re-uploading when the data changes or on force.
+*/
+using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNetClient.Services;
 using NekoNetClient.Services.Mediator;
@@ -8,6 +19,10 @@ using NekoNetClient.WebAPI.SignalR;
 
 namespace NekoNetClient.PlayerData.Pairs;
 
+/// <summary>
+/// Distributes the local player's most recent character data to all currently visible online users
+/// on a single connected hub (non-multi-service). Ensures files are uploaded before pushing the data.
+/// </summary>
 public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
 {
     private readonly ApiController _apiController;
@@ -23,6 +38,9 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
     private readonly CancellationTokenSource _runtimeCts = new();
 
 
+    /// <summary>
+    /// Creates a new distributor for a single hub connection.
+    /// </summary>
     public VisibleUserDataDistributor(ILogger<VisibleUserDataDistributor> logger, ApiController apiController, DalamudUtilService dalamudUtil,
         PairManager pairManager, MareMediator mediator, FileUploadManager fileTransferManager) : base(logger, mediator)
     {
@@ -50,6 +68,7 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
         Mediator.Subscribe<DisconnectedMessage>(this, (_) => _previouslyVisiblePlayers.Clear());
     }
 
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
         if (disposing)
@@ -61,6 +80,9 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
         base.Dispose(disposing);
     }
 
+    /// <summary>
+    /// Schedules a push of current data to all currently visible users.
+    /// </summary>
     private void PushToAllVisibleUsers(bool forced = false)
     {
         foreach (var user in _pairManager.GetVisibleUsers())
@@ -75,6 +97,9 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Periodic update: discovers new visible users since the last frame and schedules a push.
+    /// </summary>
     private void FrameworkOnUpdate()
     {
         if (!_dalamudUtil.GetIsPlayerPresent() || !_apiController.IsConnected) return;
@@ -95,6 +120,9 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
         PushCharacterData();
     }
 
+    /// <summary>
+    /// Performs the file upload (if needed) and pushes the character data to queued recipients.
+    /// </summary>
     private void PushCharacterData(bool forced = false)
     {
         if (_lastCreatedData == null || _usersToPushDataTo.Count == 0) return;

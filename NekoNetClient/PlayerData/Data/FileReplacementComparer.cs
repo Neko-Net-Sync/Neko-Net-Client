@@ -1,5 +1,14 @@
-﻿namespace NekoNetClient.PlayerData.Data;
+﻿/*
+   Neko-Net Client — PlayerData.Data.FileReplacementComparer
+   ---------------------------------------------------------
+   Purpose
+   - Equality comparer for FileReplacement entries that considers resolved path and game paths set.
+*/
+namespace NekoNetClient.PlayerData.Data;
 
+/// <summary>
+/// Equality comparer for <see cref="FileReplacement"/> that compares the resolved path and the set of game paths.
+/// </summary>
 public class FileReplacementComparer : IEqualityComparer<FileReplacement>
 {
     private static readonly FileReplacementComparer _instance = new();
@@ -7,14 +16,17 @@ public class FileReplacementComparer : IEqualityComparer<FileReplacement>
     private FileReplacementComparer()
     { }
 
+    /// <summary>Singleton instance.</summary>
     public static FileReplacementComparer Instance => _instance;
 
+    /// <inheritdoc />
     public bool Equals(FileReplacement? x, FileReplacement? y)
     {
         if (x == null || y == null) return false;
         return x.ResolvedPath.Equals(y.ResolvedPath) && CompareLists(x.GamePaths, y.GamePaths);
     }
 
+    /// <inheritdoc />
     public int GetHashCode(FileReplacement obj)
     {
         return HashCode.Combine(obj.ResolvedPath.GetHashCode(StringComparison.OrdinalIgnoreCase), GetOrderIndependentHashCode(obj.GamePaths));

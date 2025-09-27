@@ -3,13 +3,14 @@ using Microsoft.Extensions.Logging;
 using System.Threading;
 using System.Threading.Tasks;
 
-/*
- * Summary
- * -------
- * Hosted background service that subscribes to the ISyncFacade event stream
- * and logs emitted events at Trace level. Useful for diagnostics and for
- * observing facade activity without affecting behavior.
- */
+//
+// NekoNetClient — Services.Sync.SyncFacadeEventLogger
+// ------------------------------------------------------------
+// Purpose:
+//   Hosted background service that subscribes to the ISyncFacade event stream
+//   and logs emitted events at Trace level. Useful for diagnostics and for
+//   observing façade activity without affecting behavior.
+//
 
 namespace NekoNetClient.Services.Sync;
 
@@ -20,12 +21,16 @@ public sealed class SyncFacadeEventLogger : IHostedService, IDisposable
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
 
+    /// <summary>
+    /// Creates a new <see cref="SyncFacadeEventLogger"/> bound to a facade.
+    /// </summary>
     public SyncFacadeEventLogger(ILogger<SyncFacadeEventLogger> logger, ISyncFacade facade)
     {
         _logger = logger;
         _facade = facade;
     }
 
+    /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _loopCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -47,6 +52,7 @@ public sealed class SyncFacadeEventLogger : IHostedService, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _loopCts?.Cancel();

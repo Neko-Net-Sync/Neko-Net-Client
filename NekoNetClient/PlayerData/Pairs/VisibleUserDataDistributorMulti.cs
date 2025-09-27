@@ -1,3 +1,14 @@
+/*
+    Neko-Net Client — PlayerData.Pairs.VisibleUserDataDistributorMulti
+    ------------------------------------------------------------------
+    Purpose
+    - Distributes your character data to visible users across multiple services and configured servers.
+    - Coordinates uploads and pushes via MultiHubManager and FileUploadManager.
+
+    Behavior
+    - Reacts to CharacterDataCreated, ConfiguredConnected and per-frame events to discover recipients.
+    - Tracks last visible sets per service and per configured index to avoid redundant pushes.
+*/
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Data;
 using NekoNet.API.Dto;
@@ -10,6 +21,10 @@ using NekoNetClient.Utils;
 
 namespace NekoNetClient.PlayerData.Pairs;
 
+/// <summary>
+/// Multi-service variant of visible user data distribution. Handles both named services (e.g., NekoNet, Lightless,
+/// TeraSync) and configured server indices, ensuring files are uploaded and data is pushed only to newly visible users.
+/// </summary>
 public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscriberBase
 {
     private readonly MultiHubManager _multi;
@@ -23,6 +38,9 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
     private readonly ConcurrentDictionary<SyncService, HashSet<UserData>> _prevServiceVisible = new();
     private readonly ConcurrentDictionary<int, HashSet<UserData>> _prevConfiguredVisible = new();
 
+    /// <summary>
+    /// Creates a new multi-service distributor.
+    /// </summary>
     public VisibleUserDataDistributorMulti(ILogger<VisibleUserDataDistributorMulti> logger,
         MultiHubManager multi, FileUploadManager upload, DalamudUtilService dalamud,
         MareMediator mediator) : base(logger, mediator)
@@ -45,6 +63,9 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
         Mediator.Subscribe<DelayedFrameworkUpdateMessage>(this, (_) => OnFrame());
     }
 
+    /// <summary>
+    /// Frame update: detects newly visible users across services and configured indices and schedules pushes.
+    /// </summary>
     private void OnFrame()
     {
         if (!_dalamud.GetIsPlayerPresent() || _lastCreatedData == null) return;
@@ -83,6 +104,9 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
         }
     }
 
+    /// <summary>
+    /// Pushes to all supported services and configured indices.
+    /// </summary>
     private async Task PushToAllAsync(bool force)
     {
         await PushToServiceAsync(SyncService.NekoNet, force);
@@ -96,6 +120,9 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
         }
     }
 
+    /// <summary>
+    /// Pushes the current data to all visible users on a single service.
+    /// </summary>
     private async Task PushToServiceAsync(SyncService svc, bool force = false)
     {
         try
@@ -119,6 +146,9 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
         catch { }
     }
 
+    /// <summary>
+    /// Pushes the current data to all visible users on a configured server index.
+    /// </summary>
     private async Task PushToConfiguredAsync(int serverIndex, bool force = false)
     {
         try

@@ -1,5 +1,14 @@
-﻿namespace NekoNetClient.PlayerData.Data;
+﻿/*
+   Neko-Net Client — PlayerData.Data.PlayerChanges
+   -----------------------------------------------
+   Purpose
+   - Enumerates the kinds of player-related changes that can be applied by the PairHandler pipeline.
+*/
+namespace NekoNetClient.PlayerData.Data;
 
+/// <summary>
+/// Types of per-kind changes used to drive the apply pipeline order and behavior.
+/// </summary>
 public enum PlayerChanges
 {
     ModFiles = 1,

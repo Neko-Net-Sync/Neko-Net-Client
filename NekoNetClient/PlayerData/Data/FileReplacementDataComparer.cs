@@ -1,7 +1,16 @@
-﻿using NekoNet.API.Data;
+﻿/*
+   Neko-Net Client — PlayerData.Data.FileReplacementDataComparer
+   -------------------------------------------------------------
+   Purpose
+   - Equality comparer for API <see cref="NekoNet.API.Data.FileReplacementData"/> entries.
+*/
+using NekoNet.API.Data;
 
 namespace NekoNetClient.PlayerData.Data;
 
+/// <summary>
+/// Equality comparer for <see cref="FileReplacementData"/> that considers hash, game paths, and swap path.
+/// </summary>
 public class FileReplacementDataComparer : IEqualityComparer<FileReplacementData>
 {
     private static readonly FileReplacementDataComparer _instance = new();
@@ -9,14 +18,17 @@ public class FileReplacementDataComparer : IEqualityComparer<FileReplacementData
     private FileReplacementDataComparer()
     { }
 
+    /// <summary>Singleton instance.</summary>
     public static FileReplacementDataComparer Instance => _instance;
 
+    /// <inheritdoc />
     public bool Equals(FileReplacementData? x, FileReplacementData? y)
     {
         if (x == null || y == null) return false;
         return x.Hash.Equals(y.Hash) && CompareHashSets(x.GamePaths.ToHashSet(StringComparer.Ordinal), y.GamePaths.ToHashSet(StringComparer.Ordinal)) && string.Equals(x.FileSwapPath, y.FileSwapPath, StringComparison.Ordinal);
     }
 
+    /// <inheritdoc />
     public int GetHashCode(FileReplacementData obj)
     {
         return HashCode.Combine(obj.Hash.GetHashCode(StringComparison.OrdinalIgnoreCase), GetOrderIndependentHashCode(obj.GamePaths), StringComparer.Ordinal.GetHashCode(obj.FileSwapPath));

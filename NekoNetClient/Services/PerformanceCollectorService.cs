@@ -14,6 +14,10 @@ using System.Text;
 
 namespace NekoNetClient.Services;
 
+/// <summary>
+/// Lightweight performance probe that can wrap actions and functions, recording execution times into
+/// rolling counters for optional diagnostics and logging. Enabled via configuration.
+/// </summary>
 public sealed class PerformanceCollectorService : IHostedService
 {
     private const string _counterSplit = "=>";
@@ -22,12 +26,27 @@ public sealed class PerformanceCollectorService : IHostedService
     public ConcurrentDictionary<string, RollingList<(TimeOnly, long)>> PerformanceCounters { get; } = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _periodicLogPruneTaskCts = new();
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PerformanceCollectorService"/>.
+    /// </summary>
+    /// <param name="logger">Logger used for status and spike warnings (debug builds).</param>
+    /// <param name="mareConfigService">Configuration to enable/disable performance collection.</param>
     public PerformanceCollectorService(ILogger<PerformanceCollectorService> logger, MareConfigService mareConfigService)
     {
         _logger = logger;
         _mareConfigService = mareConfigService;
     }
 
+    /// <summary>
+    /// Times a function call and returns its result, recording the elapsed ticks into a rolling list
+    /// keyed by the sender type and supplied counter name.
+    /// </summary>
+    /// <typeparam name="T">Return type of the function.</typeparam>
+    /// <param name="sender">The caller used for the counter prefix.</param>
+    /// <param name="counterName">Interpolated counter name providing additional context.</param>
+    /// <param name="func">The function to invoke and time.</param>
+    /// <param name="maxEntries">Maximum entries to retain for this counter.</param>
+    /// <returns>The function's result.</returns>
     public T LogPerformance<T>(object sender, MareInterpolatedStringHandler counterName, Func<T> func, int maxEntries = 10000)
     {
         if (!_mareConfigService.Current.LogPerformance) return func.Invoke();
@@ -55,6 +74,14 @@ public sealed class PerformanceCollectorService : IHostedService
         }
     }
 
+    /// <summary>
+    /// Times an action and records the elapsed ticks into a rolling list keyed by the sender type
+    /// and supplied counter name.
+    /// </summary>
+    /// <param name="sender">The caller used for the counter prefix.</param>
+    /// <param name="counterName">Interpolated counter name providing additional context.</param>
+    /// <param name="act">The action to invoke and time.</param>
+    /// <param name="maxEntries">Maximum entries to retain for this counter.</param>
     public void LogPerformance(object sender, MareInterpolatedStringHandler counterName, Action act, int maxEntries = 10000)
     {
         if (!_mareConfigService.Current.LogPerformance) { act.Invoke(); return; }
@@ -82,6 +109,9 @@ public sealed class PerformanceCollectorService : IHostedService
         }
     }
 
+    /// <summary>
+    /// Starts background maintenance and pruning for stale counters.
+    /// </summary>
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting PerformanceCollectorService");
@@ -90,6 +120,9 @@ public sealed class PerformanceCollectorService : IHostedService
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Stops background maintenance and releases associated resources.
+    /// </summary>
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _periodicLogPruneTaskCts.Cancel();
@@ -97,6 +130,10 @@ public sealed class PerformanceCollectorService : IHostedService
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Builds and logs a table-like summary of performance counters, optionally limited to recent entries.
+    /// </summary>
+    /// <param name="limitBySeconds">If greater than 0, only entries within this window are considered.</param>
     internal void PrintPerformanceStats(int limitBySeconds = 0)
     {
         if (!_mareConfigService.Current.LogPerformance)
@@ -163,6 +200,9 @@ public sealed class PerformanceCollectorService : IHostedService
         _logger.LogInformation("{perf}", sb.ToString());
     }
 
+    /// <summary>
+    /// Appends a separator row to the performance table.
+    /// </summary>
     private static void DrawSeparator(StringBuilder sb, int longestCounterName)
     {
         sb.Append("".PadRight(15, '-'));
@@ -179,6 +219,9 @@ public sealed class PerformanceCollectorService : IHostedService
         sb.AppendLine();
     }
 
+    /// <summary>
+    /// Periodically prunes counters that haven't received updates for a fixed time window to keep memory usage bounded.
+    /// </summary>
     private async Task PeriodicLogPrune()
     {
         while (!_periodicLogPruneTaskCts.Token.IsCancellationRequested)

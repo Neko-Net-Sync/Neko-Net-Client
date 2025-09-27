@@ -1,3 +1,13 @@
+/*
+     Neko-Net Client — PlayerData.Factories.PairHandlerFactory
+     ---------------------------------------------------------
+     Purpose
+     - Creates fully wired PairHandler instances and maps API URL overrides back to server indices for
+         correct auth/routing across multiple services.
+
+     Notes
+     - Normalizes ws/wss to http/https, strips ports and trailing slashes to compare hosts with configured servers.
+*/
 using System;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -11,6 +21,10 @@ using NekoNetClient.Services.ServerConfiguration;
 
 namespace NekoNetClient.PlayerData.Factories;
 
+/// <summary>
+/// Factory for fully configured <see cref="PairHandler"/> instances. Resolves the appropriate server index
+/// for service-scoped pairs by normalizing and matching API base URLs, ensuring REST calls authenticate correctly.
+/// </summary>
 public class PairHandlerFactory
 {
     private readonly DalamudUtilService _dalamudUtilService;
@@ -44,6 +58,10 @@ public class PairHandlerFactory
         _serverConfigManager = serverConfigManager;
     }
 
+    /// <summary>
+    /// Creates a <see cref="PairHandler"/> for the given <paramref name="pair"/> and wires all collaborators.
+    /// If the pair is service-scoped, attempts to map its API URL override back to a configured server index.
+    /// </summary>
     public PairHandler Create(Pair pair)
     {
         int? serverIndex = null;
