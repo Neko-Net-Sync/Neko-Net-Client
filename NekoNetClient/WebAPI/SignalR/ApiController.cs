@@ -47,7 +47,7 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
     private bool _initialized;
     private string? _lastUsedToken;
     private HubConnection? _mareHub;
-    private ServerState _serverState;
+    private volatile ServerState _serverState;
     private CensusUpdateMessage? _lastCensus;
 
     public ApiController(ILogger<ApiController> logger, HubFactory hubFactory, DalamudUtilService dalamudUtil,
@@ -103,8 +103,13 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
         get => _serverState;
         private set
         {
-            Logger.LogDebug("New ServerState: {value}, prev ServerState: {_serverState}", value, _serverState);
-            _serverState = value;
+            if (_serverState != value)
+            {
+                Logger.LogDebug("New ServerState: {value}, prev ServerState: {_serverState}", value, _serverState);
+                _serverState = value;
+                // Notify UI to refresh when connection state changes to avoid stale reads on the UI thread
+                try { Mediator.Publish(new RefreshUiMessage()); } catch { }
+            }
         }
     }
 

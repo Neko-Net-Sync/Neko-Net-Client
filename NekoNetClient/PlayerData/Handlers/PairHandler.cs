@@ -56,6 +56,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     private readonly IpcManager _ipcManager;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly PlayerPerformanceService _playerPerformanceService;
+    private readonly PersonDownloadCoordinator _personDownloadCoordinator;
     private readonly ServerConfigurationManager _serverConfigManager;
     private readonly PluginWarningNotificationService _pluginWarningNotificationManager;
     private CancellationTokenSource? _applicationCancellationTokenSource = new();
@@ -80,6 +81,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         DalamudUtilService dalamudUtil, IHostApplicationLifetime lifetime,
         FileCacheManager fileDbManager, MareMediator mediator,
         PlayerPerformanceService playerPerformanceService,
+        PersonDownloadCoordinator personDownloadCoordinator,
         ServerConfigurationManager serverConfigManager) : base(logger, mediator)
     {
         Pair = pair;
@@ -90,7 +92,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         _dalamudUtil = dalamudUtil;
         _lifetime = lifetime;
         _fileDbManager = fileDbManager;
-        _playerPerformanceService = playerPerformanceService;
+    _playerPerformanceService = playerPerformanceService;
+    _personDownloadCoordinator = personDownloadCoordinator;
         _serverConfigManager = serverConfigManager;
         _penumbraCollection = _ipcManager.Penumbra.CreateTemporaryCollectionAsync(logger, Pair.UserData.UID).ConfigureAwait(false).GetAwaiter().GetResult();
 
@@ -523,7 +526,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                     return;
                 }
 
-                _pairDownloadTask = Task.Run(async () => await _downloadManager.DownloadFiles(_charaHandler!, toDownloadReplacements, downloadToken).ConfigureAwait(false));
+                // Coalesce downloads across services/handlers by the file-set signature to avoid redundant concurrent downloads
+                var signature = string.Join(',', toDownloadReplacements.Select(r => r.Hash).OrderBy(h => h, StringComparer.Ordinal));
+                _pairDownloadTask = _personDownloadCoordinator.RunCoalescedAsync(signature,
+                    () => _downloadManager.DownloadFiles(_charaHandler!, toDownloadReplacements, downloadToken));
 
                 await _pairDownloadTask.ConfigureAwait(false);
 

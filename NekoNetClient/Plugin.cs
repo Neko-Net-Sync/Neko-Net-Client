@@ -131,6 +131,7 @@ public sealed class Plugin : IDalamudPlugin
             collection.AddSingleton<IdDisplayHandler>();
             collection.AddSingleton<PlayerPerformanceService>();
             collection.AddSingleton<TransientResourceManager>();
+            collection.AddSingleton<PersonDownloadCoordinator>();
 
             // facade layer
             collection.AddSingleton<ISyncFacade, SyncFacade>();

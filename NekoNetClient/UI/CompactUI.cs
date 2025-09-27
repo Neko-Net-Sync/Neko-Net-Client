@@ -161,13 +161,17 @@ public class CompactUi : WindowMediatorSubscriberBase
         var ver = Assembly.GetExecutingAssembly().GetName().Version;
         WindowName = "Neko-Net " + ver.Major + "." + ver.Minor + "." + ver.Build + "###Neko-NetMainUI";
 #endif
-        Mediator.Subscribe<SwitchToMainUiMessage>(this, (_) => IsOpen = true);
+    Mediator.Subscribe<SwitchToMainUiMessage>(this, (_) => IsOpen = true);
         Mediator.Subscribe<SwitchToIntroUiMessage>(this, (_) => IsOpen = false);
         Mediator.Subscribe<CutsceneStartMessage>(this, (_) => UiSharedService_GposeStart());
         Mediator.Subscribe<CutsceneEndMessage>(this, (_) => UiSharedService_GposeEnd());
         Mediator.Subscribe<DownloadStartedMessage>(this, (msg) => _currentDownloads[msg.DownloadId] = msg.DownloadStatus);
         Mediator.Subscribe<DownloadFinishedMessage>(this, (msg) => _currentDownloads.TryRemove(msg.DownloadId, out _));
-        Mediator.Subscribe<RefreshUiMessage>(this, (msg) => _drawFolders = GetDrawFolders().ToList());
+    Mediator.Subscribe<RefreshUiMessage>(this, (msg) => _drawFolders = GetDrawFolders().ToList());
+    // Reflect connection state immediately on startup and on changes
+    Mediator.Subscribe<ConnectedMessage>(this, (msg) => { _drawFolders = GetDrawFolders().ToList(); });
+    Mediator.Subscribe<DisconnectedMessage>(this, (msg) => { _drawFolders = GetDrawFolders().ToList(); });
+    Mediator.Subscribe<ConfiguredConnectedMessage>(this, (msg) => { _drawFolders = GetDrawFolders().ToList(); });
 
         Flags |= ImGuiWindowFlags.NoDocking;
 
@@ -793,6 +797,7 @@ public class CompactUi : WindowMediatorSubscriberBase
                     _serverManager.SelectServer(i);
                     _serverManager.Save();
                     _ = _apiController.CreateConnectionsAsync();
+                    Mediator.Publish(new RefreshUiMessage());
                 }
                 if (selected) ImGui.SetItemDefaultFocus();
             }
