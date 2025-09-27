@@ -1,4 +1,11 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿// -------------------------------------------------------------------------------------------------
+// Neko-Net Client — UI.CharaDataHubUi (MCD Online partial)
+//
+// Purpose
+//   UI for creating, viewing, and editing a user's own Character Data stored on the server.
+//   Includes table of entries, filtering, creation, deletion, and editing subpanels.
+// -------------------------------------------------------------------------------------------------
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
@@ -16,6 +23,10 @@ internal sealed partial class CharaDataHubUi
     private bool _createOnlyShowFav = false;
     private bool _createOnlyShowNotDownloadable = false;
 
+    /// <summary>
+    /// Draws the edit panel for a single Character Data entry, including save/undo, upload progress,
+    /// and sections for general info, access/sharing, appearance, and poses.
+    /// </summary>
     private void DrawEditCharaData(CharaDataFullExtendedDto? dataDto)
     {
         using var imguiid = ImRaii.PushId(dataDto?.Id ?? "NoData");
@@ -141,6 +152,10 @@ internal sealed partial class CharaDataHubUi
         DrawEditCharaDataPoses(updateDto);
     }
 
+    /// <summary>
+    /// Draws the Access and Sharing editor for the selected entry, including AccessType and ShareType
+    /// combos and the specific individuals/syncshells list.
+    /// </summary>
     private void DrawEditCharaDataAccessAndSharing(CharaDataExtendedUpdateDto updateDto)
     {
         _uiSharedService.BigText("Access and Sharing");
@@ -192,6 +207,10 @@ internal sealed partial class CharaDataHubUi
         ImGuiHelpers.ScaledDummy(10f);
     }
 
+    /// <summary>
+    /// Draws appearance-related controls and indicators for a selected entry (set to current, preview
+    /// on self, file stats, missing-file remediation).
+    /// </summary>
     private void DrawEditCharaDataAppearance(CharaDataFullExtendedDto dataDto, CharaDataExtendedUpdateDto updateDto)
     {
         _uiSharedService.BigText("Appearance");
@@ -274,6 +293,10 @@ internal sealed partial class CharaDataHubUi
         _uiSharedService.BooleanToColoredIcon(hasCustomizeData, false);
     }
 
+    /// <summary>
+    /// Draws general details for a selected entry, including code, timestamps, downloads, description,
+    /// expiry, and deletion.
+    /// </summary>
     private void DrawEditCharaDataGeneral(CharaDataFullExtendedDto dataDto, CharaDataExtendedUpdateDto updateDto)
     {
         _uiSharedService.BigText("General");
@@ -402,6 +425,10 @@ internal sealed partial class CharaDataHubUi
         }
     }
 
+    /// <summary>
+    /// Draws the Poses section for the selected entry, including add/remove, attach, delete, and map
+    /// affordances for world data.
+    /// </summary>
     private void DrawEditCharaDataPoses(CharaDataExtendedUpdateDto updateDto)
     {
         _uiSharedService.BigText("Poses");
@@ -558,6 +585,9 @@ internal sealed partial class CharaDataHubUi
         }
     }
 
+    /// <summary>
+    /// Draws the MCD Online tab: list of own entries with filters, creation, and the edit panel.
+    /// </summary>
     private void DrawMcdOnline()
     {
         _uiSharedService.BigText("Mare Character Data Online");

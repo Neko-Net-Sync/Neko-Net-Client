@@ -1,4 +1,13 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿// -------------------------------------------------------------------------------------------------
+// Neko-Net Client — UI.CharaDataHubUi (main partial)
+//
+// Purpose
+//   Primary window for managing Mare Character Data (MCD): browsing shared entries, applying data
+//   to actors in GPose, working with nearby shared poses, and managing creation/editing workflows.
+//   This file contains the main window lifecycle and top-level tab orchestration; functional
+//   sections are split across additional partials.
+// -------------------------------------------------------------------------------------------------
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.ImGuiFileDialog;
@@ -18,6 +27,11 @@ using NekoNetClient.Utils;
 
 namespace NekoNetClient.UI;
 
+/// <summary>
+/// Main UI window for the Character Data Hub. Hosts top-level tabs (GPose Together, Data Application,
+/// Data Creation, Settings) and coordinates user interactions with <see cref="CharaDataManager"/> and
+/// related services. Functionality is organized across multiple partials.
+/// </summary>
 internal sealed partial class CharaDataHubUi : WindowMediatorSubscriberBase
 {
     private const int maxPoses = 10;
@@ -74,6 +88,9 @@ internal sealed partial class CharaDataHubUi : WindowMediatorSubscriberBase
     private (string Id, string? Alias, string AliasOrId, string? Note)[]? _openComboHybridEntries = null;
     private bool _comboHybridUsedLastFrame = false;
 
+    /// <summary>
+    /// Initializes a new instance of the window and wires mediator subscriptions for quick open paths.
+    /// </summary>
     public CharaDataHubUi(ILogger<CharaDataHubUi> logger, MareMediator mediator, PerformanceCollectorService performanceCollectorService,
                          CharaDataManager charaDataManager, CharaDataNearbyManager charaDataNearbyManager, CharaDataConfigService configService,
                          UiSharedService uiSharedService, ServerConfigurationManager serverConfigurationManager,
@@ -115,6 +132,9 @@ internal sealed partial class CharaDataHubUi : WindowMediatorSubscriberBase
         return name;
     }
 
+    /// <summary>
+    /// Handles window close. Cancels transient work, resets filters, and disables nearby computation.
+    /// </summary>
     public override void OnClose()
     {
         if (_disableUI)
@@ -133,6 +153,9 @@ internal sealed partial class CharaDataHubUi : WindowMediatorSubscriberBase
         _openComboHybridEntries = null;
     }
 
+    /// <summary>
+    /// Called when window opens; resets cancellation tokens for this session.
+    /// </summary>
     public override void OnOpen()
     {
         _closalCts = _closalCts.CancelRecreate();
@@ -149,6 +172,10 @@ internal sealed partial class CharaDataHubUi : WindowMediatorSubscriberBase
         base.Dispose(disposing);
     }
 
+    /// <summary>
+    /// Renders the window content and coordinates tab content across partials. Also manages periodic
+    /// refresh of favorites and disables controls during blocking operations.
+    /// </summary>
     protected override void DrawInternal()
     {
         if (!_comboHybridUsedLastFrame)

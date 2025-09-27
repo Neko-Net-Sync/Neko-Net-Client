@@ -1,4 +1,11 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿// -------------------------------------------------------------------------------------------------
+// Neko-Net Client — UI.CharaDataHubUi (Nearby Poses partial)
+//
+// Purpose
+//   UI for discovering and interacting with nearby shared world poses: filtering, map interaction,
+//   and GPose application/spawn actions.
+// -------------------------------------------------------------------------------------------------
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
@@ -9,6 +16,10 @@ namespace NekoNetClient.UI;
 
 internal partial class CharaDataHubUi
 {
+    /// <summary>
+    /// Draws the Nearby Poses tab. Shows settings, refresh options, and a list of nearby shared poses
+    /// with distance and direction indicators. Provides actions to apply pose or spawn and pose.
+    /// </summary>
     private void DrawNearbyPoses()
     {
         _uiSharedService.BigText("Poses Nearby");
@@ -189,6 +200,9 @@ internal partial class CharaDataHubUi
         _charaDataNearbyManager.SetHoveredVfx(_nearbyHovered);
     }
 
+    /// <summary>
+    /// Draws the refresh button for Shared With You data with cooldown enforcement.
+    /// </summary>
     private void DrawUpdateSharedDataButton()
     {
         using (ImRaii.Disabled(_charaDataManager.GetAllDataTask != null

@@ -1,4 +1,11 @@
-﻿using Dalamud.Interface.Utility.Raii;
+﻿// -------------------------------------------------------------------------------------------------
+// Neko-Net Client — UI.CharaDataHubUi (functions partial)
+//
+// Purpose
+//   Helper functions used by the Character Data Hub window for formatting, tooltips, and state
+//   updates. No logic changes; documentation only.
+// -------------------------------------------------------------------------------------------------
+using Dalamud.Interface.Utility.Raii;
 using NekoNet.API.Dto.CharaData;
 using NekoNetClient.MareConfiguration.Models;
 using NekoNetClient.Services.CharaData.Models;
@@ -8,6 +15,7 @@ namespace NekoNetClient.UI;
 
 internal sealed partial class CharaDataHubUi
 {
+	/// <summary>Returns a display string for <see cref="AccessTypeDto"/>.</summary>
 	private static string GetAccessTypeString(AccessTypeDto dto) => dto switch
 	{
 		AccessTypeDto.AllPairs => "All Pairs",
@@ -16,12 +24,16 @@ internal sealed partial class CharaDataHubUi
 		AccessTypeDto.Public => "Everyone"
 	};
 
+	/// <summary>Returns a display string for <see cref="ShareTypeDto"/>.</summary>
 	private static string GetShareTypeString(ShareTypeDto dto) => dto switch
 	{
 		ShareTypeDto.Private => "Code Only",
 		ShareTypeDto.Shared => "Shared"
 	};
 
+	/// <summary>
+	/// Tooltip helper for world data presence and description.
+	/// </summary>
 	private static string GetWorldDataTooltipText(PoseEntryExtended poseEntry)
 	{
 		if (!poseEntry.HasWorldData) return "This Pose has no world data attached.";
@@ -29,6 +41,15 @@ internal sealed partial class CharaDataHubUi
 	}
 
 
+	/// <summary>
+	/// UI pattern: draw GPose action control with automatic enable/disable and a composed tooltip
+	/// listing unmet requirements.
+	/// </summary>
+	/// <param name="gposeActionDraw">Delegate that draws the actionable UI when enabled.</param>
+	/// <param name="actionDescription">Short description header for the tooltip.</param>
+	/// <param name="dto">Meta info to validate against.</param>
+	/// <param name="hasValidGposeTarget">Whether a valid GPose target is selected.</param>
+	/// <param name="isSpawning">When true, also checks for Brio availability for spawn actions.</param>
 	private void GposeMetaInfoAction(Action<CharaDataMetaInfoExtendedDto?> gposeActionDraw, string actionDescription, CharaDataMetaInfoExtendedDto? dto, bool hasValidGposeTarget, bool isSpawning)
 	{
 		StringBuilder sb = new StringBuilder();
@@ -84,6 +105,9 @@ internal sealed partial class CharaDataHubUi
 		}
 	}
 
+	/// <summary>
+	/// UI pattern: draw GPose pose action with enable/disable logic and aggregated tooltip.
+	/// </summary>
 	private void GposePoseAction(Action poseActionDraw, string poseDescription, bool hasValidGposeTarget)
 	{
 		StringBuilder sb = new StringBuilder();
@@ -127,6 +151,9 @@ internal sealed partial class CharaDataHubUi
 		}
 	}
 
+	/// <summary>
+	/// Adjusts window min/max size depending on whether the UI is in compact GPose mode.
+	/// </summary>
 	private void SetWindowSizeConstraints(bool? inGposeTab = null)
 	{
 		SizeConstraints = new()
@@ -136,6 +163,9 @@ internal sealed partial class CharaDataHubUi
 		};
 	}
 
+	/// <summary>
+	/// Refreshes the Favorites view asynchronously, honoring current filter settings.
+	/// </summary>
 	private void UpdateFilteredFavorites()
 	{
 		_ = Task.Run(async () =>
@@ -171,6 +201,10 @@ internal sealed partial class CharaDataHubUi
 		});
 	}
 
+	/// <summary>
+	/// Updates the filtered view for the "Shared with You" section using owner and downloadability
+	/// filters.
+	/// </summary>
 	private void UpdateFilteredItems()
 	{
 		if (_charaDataManager.GetSharedWithYouTask == null)

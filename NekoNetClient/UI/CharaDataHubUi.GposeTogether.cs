@@ -1,4 +1,11 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿// -------------------------------------------------------------------------------------------------
+// Neko-Net Client — UI.CharaDataHubUi (GPose Together partial)
+//
+// Purpose
+//   UI and controls for the collaborative GPose Together feature: lobby management, user listing,
+//   character assignment, and applying/spawning data for lobby participants.
+// -------------------------------------------------------------------------------------------------
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
@@ -9,6 +16,10 @@ namespace NekoNetClient.UI;
 
 internal sealed partial class CharaDataHubUi
 {
+    /// <summary>
+    /// Renders the GPose Together tab, including lobby controls and user list. Requires Brio and an
+    /// active server connection; certain interactions are disabled outside GPose.
+    /// </summary>
     private string _joinLobbyId = string.Empty;
     private void DrawGposeTogether()
     {
@@ -117,6 +128,9 @@ internal sealed partial class CharaDataHubUi
         }
     }
 
+    /// <summary>
+    /// Draws a single lobby user row including assignment, apply and spawn controls, and map info.
+    /// </summary>
     private void DrawLobbyUser(GposeLobbyUserData user,
         IEnumerable<Dalamud.Game.ClientState.Objects.Types.ICharacter?> gposeCharas)
     {
