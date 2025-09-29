@@ -34,7 +34,6 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
     private readonly Dictionary<string, DateTime> _verifiedUploadedHashes = new(StringComparer.Ordinal);
     private CancellationTokenSource? _uploadCancellationTokenSource = new();
     private Uri? _currentBaseCdn;
-    private int? _currentServerIndex;
 
     public FileUploadManager(ILogger<FileUploadManager> logger, MareMediator mediator,
         MareConfigService mareConfigService,
@@ -97,7 +96,6 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
     public async Task<List<string>> UploadFiles(List<string> hashesToUpload, IProgress<string> progress, CancellationToken? ct = null, int? serverIndex = null)
     {
         Logger.LogDebug("Trying to upload files");
-        _currentServerIndex = serverIndex;
         _currentBaseCdn = serverIndex.HasValue ? _orchestrator.GetFilesCdnUriForServerIndex(serverIndex.Value) : _orchestrator.FilesCdnUri;
         if (_currentBaseCdn == null) throw new InvalidOperationException("FileTransferManager is not initialized");
         var filesPresentLocally = hashesToUpload.Where(h => _fileDbManager.GetFileCacheByHash(h) != null).ToHashSet(StringComparer.Ordinal);
@@ -109,7 +107,7 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
 
         progress.Report($"Starting upload for {filesPresentLocally.Count} files");
 
-    var filesToUpload = await FilesSend(ResolveUploadBase(_currentBaseCdn), [.. filesPresentLocally], [], ct ?? CancellationToken.None).ConfigureAwait(false);
+        var filesToUpload = await FilesSend(_currentBaseCdn, [.. filesPresentLocally], [], ct ?? CancellationToken.None).ConfigureAwait(false);
 
         if (filesToUpload.Exists(f => f.IsForbidden))
         {
@@ -143,7 +141,6 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
 
         _uploadCancellationTokenSource = new CancellationTokenSource();
         var uploadToken = _uploadCancellationTokenSource.Token;
-        _currentServerIndex = serverIndex;
         _currentBaseCdn = serverIndex.HasValue ? _orchestrator.GetFilesCdnUriForServerIndex(serverIndex.Value) : _orchestrator.FilesCdnUri;
         Logger.LogDebug("Sending Character data {hash} to service {url}", data.DataHash.Value, serverIndex.HasValue ? _serverManager.GetServerByIndex(serverIndex.Value).ServerUri : _serverManager.CurrentApiUrl);
 
@@ -276,11 +273,11 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         var streamContent = new ProgressableStreamContent(ms, prog);
         streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         HttpResponseMessage response;
-        var baseUpload = ResolveUploadBase(_currentBaseCdn ?? _orchestrator.FilesCdnUri!);
+        var baseCdn = _currentBaseCdn ?? _orchestrator.FilesCdnUri!;
         if (!munged)
-            response = await _orchestrator.SendRequestStreamAsync(HttpMethod.Post, MareFiles.ServerFilesUploadFullPath(baseUpload, fileHash), streamContent, uploadToken).ConfigureAwait(false);
+            response = await _orchestrator.SendRequestStreamAsync(HttpMethod.Post, MareFiles.ServerFilesUploadFullPath(baseCdn, fileHash), streamContent, uploadToken).ConfigureAwait(false);
         else
-            response = await _orchestrator.SendRequestStreamAsync(HttpMethod.Post, MareFiles.ServerFilesUploadMunged(baseUpload, fileHash), streamContent, uploadToken).ConfigureAwait(false);
+            response = await _orchestrator.SendRequestStreamAsync(HttpMethod.Post, MareFiles.ServerFilesUploadMunged(baseCdn, fileHash), streamContent, uploadToken).ConfigureAwait(false);
         Logger.LogDebug("[{hash}] Upload Status: {status}", fileHash, response.StatusCode);
     }
 
@@ -297,8 +294,8 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         unverifiedUploadHashes = unverifiedUploadHashes.Where(h => _fileDbManager.GetFileCacheByHash(h) != null).ToHashSet(StringComparer.Ordinal);
 
         Logger.LogDebug("Verifying {count} files", unverifiedUploadHashes.Count);
-    var baseForSend = ResolveUploadBase(_currentBaseCdn ?? _orchestrator.FilesCdnUri!);
-    var filesToUpload = await FilesSend(baseForSend, [.. unverifiedUploadHashes], visiblePlayers.Select(p => p.UID).ToList(), uploadToken).ConfigureAwait(false);
+        var baseCdn2 = _currentBaseCdn ?? _orchestrator.FilesCdnUri!;
+        var filesToUpload = await FilesSend(baseCdn2, [.. unverifiedUploadHashes], visiblePlayers.Select(p => p.UID).ToList(), uploadToken).ConfigureAwait(false);
 
         foreach (var file in filesToUpload.Where(f => !f.IsForbidden).DistinctBy(f => f.Hash))
         {
@@ -371,42 +368,5 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         }
 
         CurrentUploads.Clear();
-    }
-
-    private Uri ResolveUploadBase(Uri fallback)
-    {
-        try
-        {
-            if (_currentServerIndex.HasValue)
-            {
-                var raw = _serverManager.GetServerByIndex(_currentServerIndex.Value).ServerUri;
-                var norm = NormalizeApiBase(raw);
-                if (!string.IsNullOrEmpty(norm) && Uri.TryCreate(norm, UriKind.Absolute, out var api))
-                {
-                    // Orchestrator maps configured API base host to server index for proper token routing
-                    Logger.LogDebug("Using API base for upload: {api}", api);
-                    return api;
-                }
-            }
-        }
-        catch { }
-        return fallback;
-    }
-
-    private static string? NormalizeApiBase(string? apiBase)
-    {
-        if (string.IsNullOrWhiteSpace(apiBase)) return null;
-        if (!Uri.TryCreate(apiBase, UriKind.Absolute, out var uri))
-        {
-            var trimmed = apiBase.Trim().TrimEnd('/');
-            if (trimmed.StartsWith("wss://", StringComparison.OrdinalIgnoreCase)) return "https://" + trimmed.Substring(6);
-            if (trimmed.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)) return "http://" + trimmed.Substring(5);
-            return trimmed;
-        }
-        var builder = new UriBuilder(uri);
-        if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
-        else if (string.Equals(builder.Scheme, "ws", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "http";
-        builder.Port = -1;
-        return builder.Uri.ToString().TrimEnd('/');
     }
 }
