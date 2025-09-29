@@ -58,6 +58,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     private readonly PlayerPerformanceService _playerPerformanceService;
     private readonly PersonDownloadCoordinator _personDownloadCoordinator;
     private readonly PersonApplyCoordinator _personApplyCoordinator;
+    private readonly IAppearancePresenceManager _presence;
     private readonly ServerConfigurationManager _serverConfigManager;
     private readonly PluginWarningNotificationService _pluginWarningNotificationManager;
     private CancellationTokenSource? _applicationCancellationTokenSource = new();
@@ -84,7 +85,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         PlayerPerformanceService playerPerformanceService,
         PersonDownloadCoordinator personDownloadCoordinator,
         PersonApplyCoordinator personApplyCoordinator,
-        ServerConfigurationManager serverConfigManager) : base(logger, mediator)
+        ServerConfigurationManager serverConfigManager, IAppearancePresenceManager presence) : base(logger, mediator)
     {
         Pair = pair;
         _gameObjectHandlerFactory = gameObjectHandlerFactory;
@@ -97,7 +98,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     _playerPerformanceService = playerPerformanceService;
     _personDownloadCoordinator = personDownloadCoordinator;
         _personApplyCoordinator = personApplyCoordinator;
-        _serverConfigManager = serverConfigManager;
+    _serverConfigManager = serverConfigManager;
+    _presence = presence;
         _penumbraCollection = _ipcManager.Penumbra.CreateTemporaryCollectionAsync(logger, Pair.UserData.UID).ConfigureAwait(false).GetAwaiter().GetResult();
 
         Mediator.Subscribe<FrameworkUpdateMessage>(this, (_) => FrameworkUpdate());
@@ -140,6 +142,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             _applicationCancellationTokenSource = _applicationCancellationTokenSource?.CancelRecreate();
         });
 
+        // No external revert-by-applyKey subscription; presence is handled per-handler disposal and cross-service online tracking.
+
         LastAppliedDataBytes = -1;
     }
 
@@ -170,6 +174,16 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         : ((FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)_charaHandler!.Address)->EntityId;
     public string? PlayerName { get; private set; }
     public string PlayerNameHash => Pair.Ident;
+
+    private static string BuildApplyKey(string? name, int? homeWorldId, string? serviceUid)
+    {
+        if (!string.IsNullOrWhiteSpace(name))
+            return $"{name.Trim().ToLowerInvariant()}@{homeWorldId.GetValueOrDefault(0)}";
+        return $"uid:{serviceUid ?? "unknown"}";
+    }
+
+    private static string BuildServiceKey(string serviceApiBase, int serverIndex)
+        => $"{serviceApiBase.Trim().ToLowerInvariant()}#{serverIndex}";
 
     /// <summary>
     /// Entry point for applying character data. Handles gameplay state checks (combat, cutscene, GPose),
@@ -322,6 +336,20 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             _applicationCancellationTokenSource = null;
             _downloadCancellationTokenSource?.CancelDispose();
             _downloadCancellationTokenSource = null;
+            bool shouldUnapply = true;
+            try
+            {
+                // release presence for this service; only unapply if no other services still hold leases
+                var pc = _dalamudUtil.FindPlayerByNameHash(Pair.Ident);
+                var applyKey = BuildApplyKey(pc.Name, null, Pair.UserData.UID);
+                var serviceKey = BuildServiceKey(Pair.ApiUrlOverride ?? string.Empty, _downloadManager.ServerIndex ?? -1);
+                shouldUnapply = _presence.Release(serviceKey, applyKey);
+                // Defensive: if other services still have leases, do not unapply
+                if (shouldUnapply && _presence.GetRefCount(applyKey) > 0)
+                    shouldUnapply = false;
+            }
+            catch { }
+
             _downloadManager.Dispose();
             _charaHandler?.Dispose();
             _charaHandler = null;
@@ -333,7 +361,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
             if (_lifetime.ApplicationStopping.IsCancellationRequested) return;
 
-            if (_dalamudUtil is { IsZoning: false, IsInCutscene: false } && !string.IsNullOrEmpty(name))
+            if (shouldUnapply && _dalamudUtil is { IsZoning: false, IsInCutscene: false } && !string.IsNullOrEmpty(name))
             {
                 Logger.LogTrace("[{applicationId}] Restoring state for {name} ({OnlineUser})", applicationId, name, Pair.UserPair);
                 // Defer heavy IPC cleanup to a background task to avoid blocking the game during draw/apply
@@ -602,6 +630,16 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
         _applicationCancellationTokenSource = _applicationCancellationTokenSource.CancelRecreate() ?? new CancellationTokenSource();
         var token = _applicationCancellationTokenSource.Token;
+
+        // Acquire cross-service presence before applying so disconnects don’t revert if other services still hold leases
+        try
+        {
+            var pc = _dalamudUtil.FindPlayerByNameHash(Pair.Ident);
+            var applyKey = BuildApplyKey(pc.Name, null, Pair.UserData.UID);
+            var serviceKey = BuildServiceKey(Pair.ApiUrlOverride ?? string.Empty, _downloadManager.ServerIndex ?? -1);
+            _presence.Acquire(serviceKey, applyKey, charaData.DataHash.Value ?? string.Empty);
+        }
+        catch { }
 
         _applicationTask = ApplyCharacterDataAsync(applicationBase, charaData, updatedData, updateModdedPaths, updateManip, moddedPaths, token);
     }

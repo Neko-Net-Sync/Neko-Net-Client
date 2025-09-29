@@ -133,6 +133,7 @@ public sealed class Plugin : IDalamudPlugin
             collection.AddSingleton<TransientResourceManager>();
             collection.AddSingleton<PersonDownloadCoordinator>();
             collection.AddSingleton<PersonApplyCoordinator>();
+            collection.AddSingleton<IAppearancePresenceManager, AppearancePresenceManager>();
 
             // facade layer
             collection.AddSingleton<ISyncFacade, SyncFacade>();

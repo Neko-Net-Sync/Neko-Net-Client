@@ -40,12 +40,13 @@ public class PairHandlerFactory
     private readonly PluginWarningNotificationService _pluginWarningNotificationManager;
     private readonly PersonDownloadCoordinator _personDownloadCoordinator;
     private readonly PersonApplyCoordinator _personApplyCoordinator;
+    private readonly IAppearancePresenceManager _appearancePresenceManager;
 
     public PairHandlerFactory(ILoggerFactory loggerFactory, GameObjectHandlerFactory gameObjectHandlerFactory, IpcManager ipcManager,
         FileDownloadManagerFactory fileDownloadManagerFactory, DalamudUtilService dalamudUtilService,
         PluginWarningNotificationService pluginWarningNotificationManager, IHostApplicationLifetime hostApplicationLifetime,
         FileCacheManager fileCacheManager, MareMediator mareMediator, PlayerPerformanceService playerPerformanceService,
-        ServerConfigurationManager serverConfigManager, PersonDownloadCoordinator personDownloadCoordinator, PersonApplyCoordinator personApplyCoordinator)
+        ServerConfigurationManager serverConfigManager, PersonDownloadCoordinator personDownloadCoordinator, PersonApplyCoordinator personApplyCoordinator, IAppearancePresenceManager appearancePresenceManager)
     {
         _loggerFactory = loggerFactory;
         _gameObjectHandlerFactory = gameObjectHandlerFactory;
@@ -59,7 +60,8 @@ public class PairHandlerFactory
         _playerPerformanceService = playerPerformanceService;
         _serverConfigManager = serverConfigManager;
         _personDownloadCoordinator = personDownloadCoordinator;
-        _personApplyCoordinator = personApplyCoordinator;
+    _personApplyCoordinator = personApplyCoordinator;
+    _appearancePresenceManager = appearancePresenceManager;
     }
 
     /// <summary>
@@ -108,6 +110,6 @@ public class PairHandlerFactory
 
         return new PairHandler(_loggerFactory.CreateLogger<PairHandler>(), pair, _gameObjectHandlerFactory,
             _ipcManager, _fileDownloadManagerFactory.Create(serverIndex, pair.ApiUrlOverride), _pluginWarningNotificationManager, _dalamudUtilService, _hostApplicationLifetime,
-            _fileCacheManager, _mareMediator, _playerPerformanceService, _personDownloadCoordinator, _personApplyCoordinator, _serverConfigManager);
+            _fileCacheManager, _mareMediator, _playerPerformanceService, _personDownloadCoordinator, _personApplyCoordinator, _serverConfigManager, _appearancePresenceManager);
     }
 }
