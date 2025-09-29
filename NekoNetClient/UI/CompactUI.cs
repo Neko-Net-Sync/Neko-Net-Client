@@ -187,17 +187,15 @@ public class CompactUi : WindowMediatorSubscriberBase
         _windowContentWidth = UiSharedService.GetWindowContentRegionWidth();
         if (!_apiController.IsCurrentVersion)
         {
-            var ver = _apiController.CurrentClientVersion;
-            var unsupported = "UNSUPPORTED VERSION";
+            var unsupported = "Cross Syncing";
             using (_uiSharedService.UidFont.Push())
             {
                 var uidTextSize = ImGui.CalcTextSize(unsupported);
                 ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMax().X + ImGui.GetWindowContentRegionMin().X) / 2 - uidTextSize.X / 2);
                 ImGui.AlignTextToFramePadding();
-                ImGui.TextColored(ImGuiColors.DalamudRed, unsupported);
+                ImGui.TextColored(ImGuiColors.HealerGreen, unsupported);
             }
-            UiSharedService.ColorTextWrapped($"Your Neko-Net installation is out of date, the current version is {ver.Major}.{ver.Minor}.{ver.Build}. " +
-                $"It is highly recommended to keep Neko-Net up to date. Open /xlplugins and update the plugin.", ImGuiColors.DalamudRed);
+            UiSharedService.ColorTextWrapped("You are connecting to a different server, Certain features may not work as expected.", ImGuiColors.DalamudYellow);
         }
 
         if (!_ipcManager.Initialized)

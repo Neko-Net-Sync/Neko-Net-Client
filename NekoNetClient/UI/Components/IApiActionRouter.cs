@@ -178,6 +178,17 @@ internal sealed class ConfiguredApiActionRouter : IApiActionRouter
 
     private async Task EnsureConnInfoAsync()
     {
+        // First, try cache from MultiHubManager to avoid awaiting hub calls on UI thread
+        var cachedUid = _multi.GetConfiguredUidCached(_serverIndex);
+        var cachedDefaults = _multi.GetConfiguredDefaultsCached(_serverIndex);
+        if (!string.IsNullOrEmpty(cachedUid))
+        {
+            _uid = cachedUid;
+            _defaults = cachedDefaults;
+            _lastInfoTs = DateTime.UtcNow;
+            return;
+        }
+
         if ((DateTime.UtcNow - _lastInfoTs) < TimeSpan.FromSeconds(10)) return;
         try
         {
@@ -192,8 +203,8 @@ internal sealed class ConfiguredApiActionRouter : IApiActionRouter
         catch { }
     }
 
-    public string UID { get { _ = EnsureConnInfoAsync(); return _uid; } }
-    public DefaultPermissionsDto? DefaultPermissions { get { _ = EnsureConnInfoAsync(); return _defaults; } }
+    public string UID { get { _ = EnsureConnInfoAsync(); return string.IsNullOrEmpty(_uid) ? (_multi.GetConfiguredUidCached(_serverIndex) ?? string.Empty) : _uid; } }
+    public DefaultPermissionsDto? DefaultPermissions { get { _ = EnsureConnInfoAsync(); return _defaults ?? _multi.GetConfiguredDefaultsCached(_serverIndex); } }
 
     private HubConnection? Hub => _multi.GetConfiguredHub(_serverIndex);
 

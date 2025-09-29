@@ -60,8 +60,10 @@ namespace NekoNetClient.WebAPI.SignalR
         private readonly ConcurrentDictionary<int, PairManager> _cfgPairManagers = new();
         private readonly ConcurrentDictionary<int, SystemInfoDto> _cfgSystemInfo = new();
         private readonly ConcurrentDictionary<int, string> _cfgLastError = new();
-        private readonly ConcurrentDictionary<int, Uri> _cfgCdn = new();
-        private readonly ConcurrentDictionary<int, DateTime> _cfgLastPush = new();
+    private readonly ConcurrentDictionary<int, Uri> _cfgCdn = new();
+    private readonly ConcurrentDictionary<int, DateTime> _cfgLastPush = new();
+    // Cache last connection info to surface UID/defaults quickly in the UI without awaiting hub calls each frame
+    private readonly ConcurrentDictionary<int, ConnectionDto> _cfgConnInfo = new();
     // Per-configured-server connection gates
     private readonly ConcurrentDictionary<int, SemaphoreSlim> _cfgGates = new();
 
@@ -113,6 +115,10 @@ namespace NekoNetClient.WebAPI.SignalR
             => _cfgCdn.TryGetValue(serverIndex, out var u) ? (u.IsDefaultPort ? u.Host : u.Host + ":" + u.Port) : null;
         public DateTime? GetConfiguredLastPushUtc(int serverIndex)
             => _cfgLastPush.TryGetValue(serverIndex, out var ts) ? ts : null;
+        public string? GetConfiguredUidCached(int serverIndex)
+            => _cfgConnInfo.TryGetValue(serverIndex, out var ci) ? ci.User.UID : null;
+        public DefaultPermissionsDto? GetConfiguredDefaultsCached(int serverIndex)
+            => _cfgConnInfo.TryGetValue(serverIndex, out var ci) ? ci.DefaultPreferredPermissions : null;
 
         public string GetConfiguredResolvedUrl(int serverIndex)
         {
@@ -195,13 +201,19 @@ namespace NekoNetClient.WebAPI.SignalR
             if (!_cfgHubs.TryGetValue(serverIndex, out var hub) || hub == null) return null;
             try
             {
-                return await hub.InvokeAsync<ConnectionDto>("GetConnectionDto", cancellationToken: ct).ConfigureAwait(false);
+                var dto = await hub.InvokeAsync<ConnectionDto>("GetConnectionDto", cancellationToken: ct).ConfigureAwait(false);
+                if (dto != null) _cfgConnInfo[serverIndex] = dto;
+                return dto;
             }
             catch
             {
                 foreach (var alt in new[] { "GetConnectionInfo", "GetConnection" })
                 {
-                    try { return await hub.InvokeAsync<ConnectionDto>(alt, cancellationToken: ct).ConfigureAwait(false); }
+                    try {
+                        var dto = await hub.InvokeAsync<ConnectionDto>(alt, cancellationToken: ct).ConfigureAwait(false);
+                        if (dto != null) _cfgConnInfo[serverIndex] = dto;
+                        return dto;
+                    }
                     catch { }
                 }
                 return null;
@@ -427,6 +439,7 @@ namespace NekoNetClient.WebAPI.SignalR
                     var conn = await GetConfiguredConnectionInfoAsync(serverIndex, CancellationToken.None).ConfigureAwait(false);
                     if (conn != null)
                     {
+                        _cfgConnInfo[serverIndex] = conn;
                         if (conn.ServerInfo?.FileServerAddress != null)
                         {
                             _cfgCdn[serverIndex] = conn.ServerInfo.FileServerAddress;

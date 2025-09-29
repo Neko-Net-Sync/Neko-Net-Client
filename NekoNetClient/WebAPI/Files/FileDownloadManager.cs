@@ -769,16 +769,22 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         Uri? baseCdn = null;
         string source = "unknown";
 
-        // For service/configured flows, call getFileSizes on the service API base (normalized to http/https)
-        // so the server can select the appropriate CDN per file. This avoids pinning all files to a single CDN.
-        if (!string.IsNullOrEmpty(_serviceApiBase))
+        // Prefer the configured server's CDN first (preserves non-default ports like :6200)
+        if (_serverIndex.HasValue)
+        {
+            baseCdn = _orchestrator.GetFilesCdnUriForServerIndex(_serverIndex.Value);
+            if (baseCdn != null) source = "server-index CDN";
+        }
+
+        // If CDN is unknown or not provided, try the service API base next, preserving any explicit port
+        if (baseCdn == null && !string.IsNullOrEmpty(_serviceApiBase))
         {
             if (Uri.TryCreate(_serviceApiBase, UriKind.Absolute, out var apiBase))
             {
                 var builder = new UriBuilder(apiBase);
                 if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
                 else if (string.Equals(builder.Scheme, "ws", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "http";
-                builder.Port = -1;
+                // keep builder.Port as-is to preserve non-default ports
                 builder.Path = builder.Path.TrimEnd('/');
                 builder.Query = null;
                 builder.Fragment = null;
@@ -786,13 +792,21 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 source = "service API base";
             }
         }
-
-        // Otherwise, prefer CDN resolved by server index, finally fall back to the main orchestrator CDN
+        // If still unknown, try to use the configured server API base (normalized) as the request base
         if (baseCdn == null && _serverIndex.HasValue)
         {
-            baseCdn = _orchestrator.GetFilesCdnUriForServerIndex(_serverIndex.Value);
-            if (baseCdn != null) source = "server-index CDN";
+            try
+            {
+                var srv = _serverConfigurationManager?.GetServerByIndex(_serverIndex.Value);
+                if (srv != null)
+                {
+                    baseCdn = _orchestrator.GetFilesCdnUriForApiBase(srv.ServerUri);
+                    if (baseCdn != null) source = "server API base";
+                }
+            }
+            catch { }
         }
+        // Finally, fall back to the currently active orchestrator CDN (main service)
         baseCdn ??= _orchestrator.FilesCdnUri;
         if (baseCdn != null && source == "unknown") source = "default CDN";
         if (baseCdn == null)

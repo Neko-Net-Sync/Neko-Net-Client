@@ -10,6 +10,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 using NekoNet.API.Dto.Group;
 using NekoNet.API.Dto.User;
@@ -41,6 +42,15 @@ internal sealed class ServiceSessionView
 
     // simple per-service filter state
     private readonly Dictionary<SyncService, string> _filters = new();
+
+    // Cross Sync actions (configured servers) — lightweight per-index UI state
+    private readonly Dictionary<int, string> _pairToAddByServer = new();
+    private readonly Dictionary<int, bool> _showJoinModalByServer = new();
+    private readonly Dictionary<int, string> _joinShellIdByServer = new();
+    private readonly Dictionary<int, string> _joinShellPwByServer = new();
+    private readonly Dictionary<int, string> _joinShellPrevPwByServer = new();
+    private readonly Dictionary<int, GroupJoinInfoDto?> _joinInfoByServer = new();
+    private readonly Dictionary<int, bool> _joinAttemptFailedByServer = new();
 
     public ServiceSessionView(
         ILogger log,
@@ -130,6 +140,25 @@ internal sealed class ServiceSessionView
         ImGui.TextColored(ImGuiColors.DalamudGrey, cdnText);
         ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - pushSize.X / 2);
         ImGui.TextColored(ImGuiColors.DalamudGrey, lastPushText);
+
+        // Centered UID (click to copy) for this service
+        try
+        {
+            var router = new ServiceApiActionRouter(_multi, svc);
+            var uid = router.UID;
+            if (!string.IsNullOrWhiteSpace(uid))
+            {
+                using (_ui.UidFont.Push())
+                {
+                    var uidSize = ImGui.CalcTextSize(uid);
+                    ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - uidSize.X / 2);
+                    ImGui.TextColored(ImGuiColors.ParsedGreen, uid);
+                }
+                if (ImGui.IsItemClicked()) ImGui.SetClipboardText(uid);
+                UiSharedService.AttachToolTip("Click to copy");
+            }
+        }
+        catch { }
 
         var connected = hubState is Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected or Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connecting or Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Reconnecting;
         var color = UiSharedService.GetBoolColor(!connected);
@@ -478,6 +507,25 @@ internal sealed class ServiceSessionView
         ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - pushSize.X / 2);
         ImGui.TextColored(ImGuiColors.DalamudGrey, lastPushText);
 
+        // Centered UID (click to copy) for this configured server
+        try
+        {
+            var router = new ConfiguredApiActionRouter(_multi, serverIndex);
+            var uid = router.UID;
+            if (!string.IsNullOrWhiteSpace(uid))
+            {
+                using (_ui.UidFont.Push())
+                {
+                    var uidSize = ImGui.CalcTextSize(uid);
+                    ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - uidSize.X / 2);
+                    ImGui.TextColored(ImGuiColors.ParsedGreen, uid);
+                }
+                if (ImGui.IsItemClicked()) ImGui.SetClipboardText(uid);
+                UiSharedService.AttachToolTip("Click to copy");
+            }
+        }
+        catch { }
+
         var connected = hubState is Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected or Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connecting or Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Reconnecting;
         var color = UiSharedService.GetBoolColor(!connected);
         var icon = connected ? FontAwesomeIcon.Unlink : FontAwesomeIcon.Link;
@@ -523,10 +571,14 @@ internal sealed class ServiceSessionView
             DrawConfiguredHeader(serverIndex);
             ImGui.Separator();
 
+            // Per-server quick actions: Add Pair + Join Syncshell
+            var router = new ConfiguredApiActionRouter(_multi, serverIndex);
+            DrawConfiguredQuickActions(serverIndex, router);
+            ImGui.Separator();
+
             var pm = _multi.GetPairManagerForConfigured(serverIndex);
             TrySeedFromConfiguredCachesThrottled(serverIndex, pm);
             
-            var router = new ConfiguredApiActionRouter(_multi, serverIndex);
             var tagHandler = new TagHandler(_servers, _servers.GetServerByIndex(serverIndex).ServerUri);
 
             string filterKey = $"cfg-{serverIndex}";
@@ -544,6 +596,127 @@ internal sealed class ServiceSessionView
             foreach (var folder in drawFolders)
             {
                 folder.Draw();
+            }
+        }
+    }
+
+    private void DrawConfiguredQuickActions(int serverIndex, ConfiguredApiActionRouter router)
+    {
+        using (ImRaii.PushId("actions-" + serverIndex))
+        {
+            var hub = _multi.GetConfiguredHub(serverIndex);
+            var connected = hub != null && hub.State == Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected;
+
+            // Add player (UID/Alias)
+            string pairToAdd = _pairToAddByServer.TryGetValue(serverIndex, out var p) ? p : string.Empty;
+            var btnSize = _ui.GetIconTextButtonSize(FontAwesomeIcon.UserPlus, "Add");
+            ImGui.SetNextItemWidth(UiSharedService.GetWindowContentRegionWidth() - btnSize - ImGui.GetStyle().ItemSpacing.X - 140f);
+            ImGui.InputTextWithHint("##pairToAdd", "UID or Alias", ref pairToAdd, 64);
+            _pairToAddByServer[serverIndex] = pairToAdd;
+            ImGui.SameLine();
+            using (ImRaii.Disabled(!connected || string.IsNullOrWhiteSpace(pairToAdd)))
+            {
+                if (_ui.IconTextButton(FontAwesomeIcon.UserPlus, "Add"))
+                {
+                    _ = router.UserAddPair(new(new(pairToAdd)));
+                    _pairToAddByServer[serverIndex] = string.Empty;
+                }
+            }
+            UiSharedService.AttachToolTip("Add individual pair on this server");
+
+            ImGui.SameLine();
+            using (ImRaii.Disabled(!connected))
+            {
+                if (_ui.IconTextButton(FontAwesomeIcon.Users, "Join Syncshell", 140f))
+                {
+                    _showJoinModalByServer[serverIndex] = true;
+                    ImGui.OpenPopup($"JoinSyncshell##modal-{serverIndex}");
+                }
+            }
+            UiSharedService.AttachToolTip("Join an existing Syncshell on this server");
+
+            // Modal content for join
+            var open = _showJoinModalByServer.TryGetValue(serverIndex, out var show) && show;
+            if (ImGui.BeginPopupModal($"JoinSyncshell##modal-{serverIndex}", ref open, UiSharedService.PopupWindowFlags))
+            {
+                _showJoinModalByServer[serverIndex] = open;
+                var joinInfo = _joinInfoByServer.TryGetValue(serverIndex, out var ji) ? ji : null;
+                string shellId = _joinShellIdByServer.TryGetValue(serverIndex, out var id) ? id : string.Empty;
+                string pw = _joinShellPwByServer.TryGetValue(serverIndex, out var pwv) ? pwv : string.Empty;
+                string prevPw = _joinShellPrevPwByServer.TryGetValue(serverIndex, out var ppw) ? ppw : string.Empty;
+
+                using (_ui.UidFont.Push())
+                    ImGui.TextUnformatted(joinInfo == null || !joinInfo.Success ? "Join Syncshell" : "Finalize join " + joinInfo.GroupAliasOrGID);
+                ImGui.Separator();
+
+                if (joinInfo == null || !joinInfo.Success)
+                {
+                    ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted("Syncshell ID"); ImGui.SameLine(180);
+                    ImGui.InputTextWithHint("##gid", "Full Syncshell ID", ref shellId, 64);
+                    _joinShellIdByServer[serverIndex] = shellId;
+
+                    ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted("Password"); ImGui.SameLine(180);
+                    ImGui.InputTextWithHint("##gpw", "Password", ref pw, 64, ImGuiInputTextFlags.Password);
+                    _joinShellPwByServer[serverIndex] = pw;
+
+                    // Show a generic failure note when the last attempt failed
+                    if (_joinAttemptFailedByServer.TryGetValue(serverIndex, out var failed) && failed)
+                    {
+                        UiSharedService.ColorTextWrapped("Failed to join the Syncshell. Check ID/password or server capacity/invites.", ImGuiColors.DalamudYellow);
+                    }
+
+                    using (ImRaii.Disabled(!connected || string.IsNullOrWhiteSpace(shellId) || string.IsNullOrWhiteSpace(pw)))
+                    {
+                        if (_ui.IconTextButton(FontAwesomeIcon.ArrowRight, "Next"))
+                        {
+                            try
+                            {
+                                var dto = hub!.InvokeAsync<GroupJoinInfoDto>("GroupJoin", new GroupPasswordDto(new GroupData(shellId), pw)).GetAwaiter().GetResult();
+                                _joinInfoByServer[serverIndex] = dto;
+                                _joinShellPrevPwByServer[serverIndex] = pw;
+                                _joinShellPwByServer[serverIndex] = string.Empty;
+                                _joinAttemptFailedByServer[serverIndex] = dto == null || !dto.Success;
+                            }
+                            catch { _joinInfoByServer[serverIndex] = null; _joinAttemptFailedByServer[serverIndex] = true; }
+                        }
+                    }
+                }
+                else
+                {
+                    ImGui.TextUnformatted("About to join: " + joinInfo.GroupAliasOrGID + " by " + joinInfo.OwnerAliasOrUID);
+                    ImGuiHelpers.ScaledDummy(2f);
+                    if (_ui.IconTextButton(FontAwesomeIcon.Plus, "Finalize join"))
+                    {
+                        try
+                        {
+                            // Map default group prefs to join permissions
+                            var defaults = router.DefaultPermissions;
+                            GroupUserPreferredPermissions joinPerms = GroupUserPreferredPermissions.NoneSet;
+                            if (defaults != null)
+                            {
+                                joinPerms.SetDisableSounds(defaults.DisableGroupSounds);
+                                joinPerms.SetDisableAnimations(defaults.DisableGroupAnimations);
+                                joinPerms.SetDisableVFX(defaults.DisableGroupVFX);
+                            }
+                            var ok = hub!.InvokeAsync<bool>("GroupJoinFinalize", new GroupJoinDto(joinInfo.Group, prevPw, joinPerms)).GetAwaiter().GetResult();
+                            if (ok)
+                            {
+                                // reset and close
+                                _joinInfoByServer[serverIndex] = null;
+                                _joinShellIdByServer[serverIndex] = string.Empty;
+                                _joinShellPwByServer[serverIndex] = string.Empty;
+                                _joinShellPrevPwByServer[serverIndex] = string.Empty;
+                                _joinAttemptFailedByServer[serverIndex] = false;
+                                _showJoinModalByServer[serverIndex] = false;
+                                ImGui.CloseCurrentPopup();
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                UiSharedService.SetScaledWindowSize(420);
+                ImGui.EndPopup();
             }
         }
     }

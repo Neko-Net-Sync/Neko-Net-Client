@@ -86,6 +86,19 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
                 _cdnByServerIdx[msg.ServerIndex] = cdn;
                 var hostKey = cdn.IsDefaultPort ? cdn.Host : $"{cdn.Host}:{cdn.Port}";
                 _serverIdxByHost[hostKey] = msg.ServerIndex;
+                // Also map the configured server's API base host to the same index, so token routing works
+                // for direct-download URLs that may be served from the API host domain.
+                try
+                {
+                    var baseKey = NormalizeApiBase(_servers.GetServerByIndex(msg.ServerIndex).ServerUri);
+                    if (!string.IsNullOrEmpty(baseKey) && Uri.TryCreate(baseKey, UriKind.Absolute, out var baseUri))
+                    {
+                        var baseHostKey = baseUri.IsDefaultPort ? baseUri.Host : $"{baseUri.Host}:{baseUri.Port}";
+                        _serverIdxByHost[baseHostKey] = msg.ServerIndex;
+                        Logger.LogDebug("Mapped configured API base host {host} to server index {idx}", baseHostKey, msg.ServerIndex);
+                    }
+                }
+                catch { }
             }
             catch { }
         });
