@@ -57,6 +57,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     private readonly IHostApplicationLifetime _lifetime;
     private readonly PlayerPerformanceService _playerPerformanceService;
     private readonly PersonDownloadCoordinator _personDownloadCoordinator;
+    private readonly PersonApplyCoordinator _personApplyCoordinator;
     private readonly ServerConfigurationManager _serverConfigManager;
     private readonly PluginWarningNotificationService _pluginWarningNotificationManager;
     private CancellationTokenSource? _applicationCancellationTokenSource = new();
@@ -82,6 +83,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         FileCacheManager fileDbManager, MareMediator mediator,
         PlayerPerformanceService playerPerformanceService,
         PersonDownloadCoordinator personDownloadCoordinator,
+        PersonApplyCoordinator personApplyCoordinator,
         ServerConfigurationManager serverConfigManager) : base(logger, mediator)
     {
         Pair = pair;
@@ -94,6 +96,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         _fileDbManager = fileDbManager;
     _playerPerformanceService = playerPerformanceService;
     _personDownloadCoordinator = personDownloadCoordinator;
+        _personApplyCoordinator = personApplyCoordinator;
         _serverConfigManager = serverConfigManager;
         _penumbraCollection = _ipcManager.Penumbra.CreateTemporaryCollectionAsync(logger, Pair.UserData.UID).ConfigureAwait(false).GetAwaiter().GetResult();
 
@@ -174,11 +177,31 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     /// </summary>
     public void ApplyCharacterData(Guid applicationBase, CharacterData characterData, bool forceApplyCustomization = false)
     {
+        // Cross-service apply serialization and duplicate suppression by UID+hash
+        var uid = Pair.UserData.UID;
+        var hash = characterData.DataHash.Value ?? string.Empty;
+        var appCts = _applicationCancellationTokenSource ??= new CancellationTokenSource();
+        bool acquired;
+        try
+        {
+            acquired = _personApplyCoordinator.TryEnterAsync(uid, hash, appCts.Token).ConfigureAwait(false).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        if (!acquired)
+        {
+            Logger.LogTrace("[BASE-{appbase}] Skip apply for {uid} at {hash}, already current", applicationBase, uid, hash);
+            return;
+        }
+
         // Dedupe fast repeat triggers (e.g., double events on service/cross) within 750ms window
         var now = DateTime.UtcNow;
         if ((now - _lastPipelineStartUtc) < TimeSpan.FromMilliseconds(750))
         {
             Logger.LogTrace("[BASE-{appbase}] Skipping duplicate ApplyCharacterData trigger (within 750ms)", applicationBase);
+            _personApplyCoordinator.Release(uid);
             return;
         }
         _lastPipelineStartUtc = now;
@@ -190,6 +213,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             Logger.LogDebug("[BASE-{appBase}] Received data but player is in combat or performing", applicationBase);
             _dataReceivedInDowntime = new(applicationBase, characterData, forceApplyCustomization);
             SetUploading(isUploading: false);
+            _personApplyCoordinator.Release(uid);
             return;
         }
 
@@ -205,6 +229,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             _forceApplyMods = hasDiffMods || _forceApplyMods || (PlayerCharacter == IntPtr.Zero && _cachedData == null);
             _cachedData = characterData;
             Logger.LogDebug("[BASE-{appBase}] Setting data: {hash}, forceApplyMods: {force}", applicationBase, _cachedData.DataHash.Value, _forceApplyMods);
+            _personApplyCoordinator.Release(uid);
             return;
         }
 
@@ -213,13 +238,18 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         Logger.LogDebug("[BASE-{appbase}] Applying data for {player}, forceApplyCustomization: {forced}, forceApplyMods: {forceMods}", applicationBase, this, forceApplyCustomization, _forceApplyMods);
         Logger.LogDebug("[BASE-{appbase}] Hash for data is {newHash}, current cache hash is {oldHash}", applicationBase, characterData.DataHash.Value, _cachedData?.DataHash.Value ?? "NODATA");
 
-        if (string.Equals(characterData.DataHash.Value, _cachedData?.DataHash.Value ?? string.Empty, StringComparison.Ordinal) && !forceApplyCustomization) return;
+        if (string.Equals(characterData.DataHash.Value, _cachedData?.DataHash.Value ?? string.Empty, StringComparison.Ordinal) && !forceApplyCustomization)
+        {
+            _personApplyCoordinator.Release(uid);
+            return;
+        }
 
         if (_dalamudUtil.IsInCutscene || _dalamudUtil.IsInGpose || !_ipcManager.Penumbra.APIAvailable || !_ipcManager.Glamourer.APIAvailable)
         {
             Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Warning,
                 "Cannot apply character data: you are in GPose, a Cutscene or Penumbra/Glamourer is not available") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
             Logger.LogInformation("[BASE-{appbase}] Application of data for {player} while in cutscene/gpose or Penumbra/Glamourer unavailable, returning", applicationBase, this);
+            _personApplyCoordinator.Release(uid);
             return;
         }
 
@@ -251,6 +281,9 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         Logger.LogDebug("[BASE-{appbase}] Downloading and applying character for {name}", applicationBase, this);
 
         DownloadAndApplyCharacter(applicationBase, characterData.DeepClone(), charaDataToUpdate);
+        // Mark as completed/satisfied for this hash now that the pipeline has been scheduled.
+        _personApplyCoordinator.Complete(uid, hash);
+        _personApplyCoordinator.Release(uid);
     }
 
     public override string ToString()

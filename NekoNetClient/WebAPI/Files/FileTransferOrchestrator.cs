@@ -288,6 +288,30 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         return Math.Clamp(dividedLimit, 1, long.MaxValue);
     }
 
+    // Detect pre-signed object storage URLs (S3/R2, GCS) where Authorization header must NOT be attached
+    public static bool IsPreSignedUrl(Uri? uri)
+    {
+        if (uri == null) return false;
+        try
+        {
+            // Quick host hint for common Cloudflare R2 domains
+            var host = uri.Host.ToLowerInvariant();
+            if (host.Contains("cloudflarestorage") || host.Contains("r2.cloudflarestorage") || host.Contains("r2.dev"))
+                return true;
+
+            // Query parameter based detection (AWS S3 pre-signed)
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            if (query.AllKeys != null && query.AllKeys.Any())
+            {
+                var keys = new HashSet<string>(query.AllKeys!.Where(k => k != null)!.Select(k => k!.ToLowerInvariant()));
+                if (keys.Contains("x-amz-signature") || keys.Contains("x-amz-algorithm") || keys.Contains("x-amz-credential"))
+                    return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
     private static string? NormalizeApiBase(string? apiBase)
     {
         if (string.IsNullOrWhiteSpace(apiBase)) return null;
@@ -325,8 +349,12 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         }
         catch { }
 
-        token ??= await _tokenProvider.GetOrUpdateToken(ct ?? CancellationToken.None).ConfigureAwait(false);
-        requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        // Do not attach Authorization for pre-signed object storage URLs
+        if (!IsPreSignedUrl(requestMessage.RequestUri))
+        {
+            token ??= await _tokenProvider.GetOrUpdateToken(ct ?? CancellationToken.None).ConfigureAwait(false);
+            requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
 
         if (requestMessage.Content != null && requestMessage.Content is not StreamContent && requestMessage.Content is not ByteArrayContent)
         {

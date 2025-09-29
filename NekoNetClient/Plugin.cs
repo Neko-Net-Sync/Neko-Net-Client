@@ -132,6 +132,7 @@ public sealed class Plugin : IDalamudPlugin
             collection.AddSingleton<PlayerPerformanceService>();
             collection.AddSingleton<TransientResourceManager>();
             collection.AddSingleton<PersonDownloadCoordinator>();
+            collection.AddSingleton<PersonApplyCoordinator>();
 
             // facade layer
             collection.AddSingleton<ISyncFacade, SyncFacade>();
@@ -230,6 +231,7 @@ public sealed class Plugin : IDalamudPlugin
             collection.AddScoped<WindowMediatorSubscriberBase, EventViewerUI>();
             collection.AddScoped<WindowMediatorSubscriberBase, ServicesUi>();
             collection.AddScoped<WindowMediatorSubscriberBase, CharaDataHubUi>();
+            collection.AddScoped<VisibleUserDataDistributorMulti>();
 
             collection.AddScoped<WindowMediatorSubscriberBase, EditProfileUi>((s) => new EditProfileUi(s.GetRequiredService<ILogger<EditProfileUi>>(),
                 s.GetRequiredService<MareMediator>(), s.GetRequiredService<ApiController>(), s.GetRequiredService<UiSharedService>(), s.GetRequiredService<FileDialogManager>(),

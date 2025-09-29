@@ -34,10 +34,15 @@ public class DownloadFileTransfer : FileTransfer
 
     /// <summary>
     /// Indicates if this file is eligible for transfer.
-    /// True when the file exists and is not forbidden. For standard CDN flows, <c>Size &gt; 0</c> is required.
-    /// Distribution-fallback entries are allowed even if <c>Size == 0</c> (see <see cref="IsDistributionDirect"/>).
+    /// - Direct download available: allowed when not forbidden, independent of FileExists/Size flags from CDN.
+    /// - Standard/CDN path: requires the file to exist and either a positive Size or a recognizable distribution URL.
     /// </summary>
-    public override bool CanBeTransferred => Dto.FileExists && !Dto.IsForbidden && (Dto.Size > 0 || IsDistributionDirect);
+    public override bool CanBeTransferred
+        => !Dto.IsForbidden
+           && (
+               DirectDownloadUri != null
+               || (Dto.FileExists && (Dto.Size > 0 || IsDistributionDirect))
+           );
     /// <summary>
     /// Gets the standard CDN/API URL used by the orchestrator for queued downloads.
     /// </summary>

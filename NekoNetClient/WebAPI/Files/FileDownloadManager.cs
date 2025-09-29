@@ -351,14 +351,36 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         CurrentDownloads = downloadFileInfoFromService.Distinct().Select(d => new DownloadFileTransfer(d))
             .Where(d => d.CanBeTransferred).ToList();
 
-        // Register all hosts involved so token routing can pick the correct server index even in service-only flows
+        // Note: some servers (e.g., PlayerSync) provide DirectDownloadUrl which bypasses the CDN queue.
+        // The internal download pipeline will branch accordingly while still emitting progress events.
         try
         {
-            var hosts = CurrentDownloads.Select(d => d.DownloadUri)
+            if (CurrentDownloads.Any(d => d.DirectDownloadUri != null))
+            {
+                PublishDownloadEvent(EventSeverity.Informational,
+                    $"Prepared {CurrentDownloads.Count(d => d.DirectDownloadUri != null)} direct-download file(s)",
+                    uri: CurrentDownloads.First().DirectDownloadUri ?? CurrentDownloads.First().DownloadUri);
+            }
+        }
+        catch { }
+
+        // Register all hosts involved (both CDN and direct) so token routing can pick the correct server index even in service-only flows
+        try
+        {
+            var hosts = new List<Uri>();
+            // Always include standard DownloadUri hosts
+            hosts.AddRange(CurrentDownloads
+                .Select(d => d.DownloadUri)
                 .Where(u => u != null)
                 .DistinctBy(u => (u!.Host, u.Port))
-                .Cast<Uri>()
-                .ToList();
+                .Cast<Uri>());
+            // Also include any DirectDownloadUri hosts (PlayerSync direct path)
+            hosts.AddRange(CurrentDownloads
+                .Where(d => d.DirectDownloadUri != null)
+                .Select(d => d.DirectDownloadUri!)
+                .DistinctBy(u => (u.Host, u.Port)));
+            // De-dup combined list by host:port
+            hosts = hosts.DistinctBy(u => (u.Host, u.Port)).ToList();
             if (hosts.Count > 0)
             {
                 _orchestrator.RegisterServiceHosts(_serviceApiBase, hosts);
@@ -402,14 +424,17 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     /// </summary>
     private async Task DownloadFilesInternal(GameObjectHandler gameObjectHandler, List<FileReplacementData> fileReplacement, CancellationToken ct)
     {
-        var downloadGroups = CurrentDownloads.GroupBy(f => f.DownloadUri.Host + ":" + f.DownloadUri.Port, StringComparer.Ordinal);
+        // Group by the actual target host/port we will download from. For direct-downloads this is DirectDownloadUri.
+        var downloadGroups = CurrentDownloads
+            .GroupBy(f => (f.DirectDownloadUri ?? f.DownloadUri).Host + ":" + (f.DirectDownloadUri ?? f.DownloadUri).Port, StringComparer.Ordinal);
 
         foreach (var downloadGroup in downloadGroups)
         {
             _downloadStatus[downloadGroup.Key] = new FileDownloadStatus()
             {
                 DownloadStatus = DownloadStatus.Initializing,
-                TotalBytes = downloadGroup.Sum(c => c.Total),
+                // If Total (compressed) is zero for direct downloads, fall back to RawSize to keep UI stable
+                TotalBytes = downloadGroup.Sum(c => c.Total > 0 ? c.Total : (c is DownloadFileTransfer dft ? dft.TotalRaw : 0)),
                 TotalFiles = 1,
                 TransferredBytes = 0,
                 TransferredFiles = 0
@@ -425,16 +450,48 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         },
         async (fileGroup, token) =>
         {
+            // Direct-download path: if any entry in this group has a DirectDownloadUri, stream files directly
+            if (fileGroup.Any(f => f.DirectDownloadUri != null))
+            {
+                try
+                {
+                    _downloadStatus[fileGroup.Key].DownloadStatus = DownloadStatus.WaitingForSlot;
+                    await _orchestrator.WaitForDownloadSlotAsync(token).ConfigureAwait(false);
+                    _downloadStatus[fileGroup.Key].DownloadStatus = DownloadStatus.Downloading;
+                    var directTransfers = fileGroup.Where(f => f.DirectDownloadUri != null).ToList();
+                    await DownloadDirectAndPersistAsync(gameObjectHandler, directTransfers, fileReplacement, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    PublishDownloadEvent(EventSeverity.Warning, "Direct-download cancelled by user", uri: (fileGroup.First().DirectDownloadUri ?? fileGroup.First().DownloadUri));
+                }
+                catch (Exception ex)
+                {
+                    PublishDownloadEvent(EventSeverity.Error, "Error during direct-download batch", uri: (fileGroup.First().DirectDownloadUri ?? fileGroup.First().DownloadUri), ex: ex);
+                }
+                finally
+                {
+                    _orchestrator.ReleaseDownloadSlot();
+                }
+                // If there are any remaining files without direct URLs in this group, fall through to the normal CDN flow for them
+                if (!fileGroup.Any(f => f.DirectDownloadUri == null))
+                {
+                    return; // nothing left for this group
+                }
+            }
+
             // let server predownload files
-            var requestIdResponse = await _orchestrator.SendRequestAsync(HttpMethod.Post, MareFiles.RequestEnqueueFullPath(fileGroup.First().DownloadUri),
-                fileGroup.Select(c => c.Hash), token).ConfigureAwait(false);
-            Logger.LogDebug("Sent request for {n} files on server {uri} with result {result}", fileGroup.Count(), fileGroup.First().DownloadUri,
+            var remaining = fileGroup.Where(f => f.DirectDownloadUri == null).ToList();
+            if (remaining.Count == 0) return; // safety
+            var requestIdResponse = await _orchestrator.SendRequestAsync(HttpMethod.Post, MareFiles.RequestEnqueueFullPath(remaining.First().DownloadUri),
+                remaining.Select(c => c.Hash), token).ConfigureAwait(false);
+            Logger.LogDebug("Sent request for {n} files on server {uri} with result {result}", remaining.Count(), remaining.First().DownloadUri,
                 await requestIdResponse.Content.ReadAsStringAsync(token).ConfigureAwait(false));
 
             Guid requestId = Guid.Parse((await requestIdResponse.Content.ReadAsStringAsync().ConfigureAwait(false)).Trim('"'));
 
-            Logger.LogDebug("GUID {requestId} for {n} files on server {uri}", requestId, fileGroup.Count(), fileGroup.First().DownloadUri);
-            PublishDownloadEvent(EventSeverity.Informational, $"Enqueued {fileGroup.Count()} files for CDN", requestId: requestId, uri: fileGroup.First().DownloadUri);
+            Logger.LogDebug("GUID {requestId} for {n} files on server {uri}", requestId, remaining.Count(), remaining.First().DownloadUri);
+            PublishDownloadEvent(EventSeverity.Informational, $"Enqueued {remaining.Count()} files for CDN", requestId: requestId, uri: remaining.First().DownloadUri);
 
             var blockFile = _fileDbManager.GetCacheFilePath(requestId.ToString("N"), "blk");
             FileInfo fi = new(blockFile);
@@ -556,6 +613,154 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     }
 
     /// <summary>
+    /// Streams files directly from their DirectDownloadUri (no queue), writing a temporary munged block per file
+    /// and then extracting into the cache. Emits progress updates to the current download group's status.
+    /// </summary>
+    private async Task DownloadDirectAndPersistAsync(GameObjectHandler gameObjectHandler, List<DownloadFileTransfer> transfers, List<FileReplacementData> fileReplacement, CancellationToken ct)
+    {
+        foreach (var t in transfers)
+        {
+            ct.ThrowIfCancellationRequested();
+            var directUri = t.DirectDownloadUri ?? t.DownloadUri;
+            var requestLabel = $"direct:{t.Hash}";
+            // Use blk for legacy block format; use raw for direct object storage content
+            var isPreSigned = FileTransferOrchestrator.IsPreSignedUrl(directUri);
+            var tempPath = _fileDbManager.GetCacheFilePath(requestLabel, isPreSigned ? "raw" : "blk");
+
+            PublishDownloadEvent(EventSeverity.Informational, "Starting direct download", uri: directUri, hash: t.Hash);
+
+            ThrottledStream? stream = null;
+            try
+            {
+                IProgress<long> progress = new Progress<long>((bytes) =>
+                {
+                    try
+                    {
+                        var key = (directUri.Host + ":" + directUri.Port);
+                        if (_downloadStatus.TryGetValue(key, out var status))
+                        {
+                            status.TransferredBytes += bytes;
+                        }
+                    }
+                    catch { }
+                });
+
+                var response = await _orchestrator.SendRequestAsync(HttpMethod.Get, directUri, ct, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+
+                Directory.CreateDirectory(Path.GetDirectoryName(tempPath)!);
+                await using (var fileStream = File.Create(tempPath))
+                {
+                    var bufferSize = response.Content.Headers.ContentLength > 1024 * 1024 ? 65536 : 8196;
+                    var buffer = new byte[bufferSize];
+                    long totalWritten = 0;
+                    var limit = _orchestrator.DownloadLimitPerSlot();
+                    stream = new ThrottledStream(await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false), limit);
+                    _activeDownloadStreams.Add(stream);
+                    int read;
+                    while ((read = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        // Pre-signed object storage content is already the compressed payload; do not munge
+                        if (!isPreSigned)
+                            MungeBuffer(buffer.AsSpan(0, read));
+                        await fileStream.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                        totalWritten += read;
+                        progress.Report(read);
+                    }
+                    await fileStream.FlushAsync(ct).ConfigureAwait(false);
+                    // Ensure totals are non-zero for UI visibility
+                    try
+                    {
+                        var key = (directUri.Host + ":" + directUri.Port);
+                        if (_downloadStatus.TryGetValue(key, out var status) && status.TotalBytes == 0)
+                        {
+                            status.TotalBytes = totalWritten;
+                        }
+                    }
+                    catch { }
+                    PublishDownloadEvent(EventSeverity.Informational, $"Direct block downloaded: {totalWritten} bytes", uri: directUri, hash: t.Hash);
+                    if (totalWritten <= 0) throw new EndOfStreamException("Zero bytes received in direct download");
+                }
+
+                // Extract content depending on format
+                _downloadStatus[(directUri.Host + ":" + directUri.Port)].DownloadStatus = DownloadStatus.Decompressing;
+                byte[] decompressedFile;
+                if (isPreSigned)
+                {
+                    // Entire file is the compressed payload (no block header, no munge). Read all bytes and unwrap.
+                    var raw = await File.ReadAllBytesAsync(tempPath, CancellationToken.None).ConfigureAwait(false);
+                    decompressedFile = LZ4Wrapper.Unwrap(raw);
+                }
+                else
+                {
+                    await using var fileBlockStream = File.OpenRead(tempPath);
+                    (string fileHash, long fileLengthBytes) = ReadBlockFileHeader(fileBlockStream);
+                    byte[] compressedFileContent = new byte[fileLengthBytes];
+                    var readBytes = await fileBlockStream.ReadAsync(compressedFileContent, CancellationToken.None).ConfigureAwait(false);
+                    if (readBytes != fileLengthBytes)
+                    {
+                        throw new EndOfStreamException();
+                    }
+                    MungeBuffer(compressedFileContent);
+                    decompressedFile = LZ4Wrapper.Unwrap(compressedFileContent);
+                }
+                string fileExtension = "dat";
+                try
+                {
+                    // We may not have the fileHash from header for pre-signed; fall back to t.Hash
+                    var fileHash = t.Hash;
+                    fileExtension = fileReplacement.First(f => string.Equals(f.Hash, fileHash, StringComparison.OrdinalIgnoreCase)).GamePaths[0].Split(".")[^1];
+                }
+                catch { }
+                if (fileExtension == "dat")
+                {
+                    try
+                    {
+                        // fallback: try to get extension from any matching replacement using this transfer's hash
+                        fileExtension = fileReplacement.First(f => string.Equals(f.Hash, t.Hash, StringComparison.OrdinalIgnoreCase)).GamePaths[0].Split(".")[^1];
+                    }
+                    catch { }
+                }
+                var filePath = _fileDbManager.GetCacheFilePath(t.Hash, fileExtension);
+                await _fileCompactor.WriteAllBytesAsync(filePath, decompressedFile, CancellationToken.None).ConfigureAwait(false);
+                PersistFileToStorage(t.Hash, filePath);
+
+                var key2 = (directUri.Host + ":" + directUri.Port);
+                if (_downloadStatus.TryGetValue(key2, out var status2))
+                {
+                    status2.TransferredFiles += 1;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                PublishDownloadEvent(EventSeverity.Error, "Exception during direct download", uri: directUri, hash: t.Hash, ex: ex);
+            }
+            finally
+            {
+                try
+                {
+                    if (stream != null)
+                    {
+                        _activeDownloadStreams.Remove(stream);
+                        await stream.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+                catch { }
+                try
+                {
+                    if (File.Exists(tempPath)) File.Delete(tempPath);
+                }
+                catch { }
+            }
+        }
+    }
+
+    /// <summary>
     /// Resolves file size information for the provided hashes via the appropriate service/CDN base, normalizing
     /// API bases and ensuring tokens are routed by host.
     /// </summary>
@@ -596,12 +801,12 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             throw new InvalidOperationException("FileTransferManager is not initialized for this server");
         }
 
-                var requestUri = MareFiles.ServerFilesGetSizesFullPath(baseCdn);
-                try
-                {
-                        PublishDownloadEvent(EventSeverity.Informational, $"Requesting file sizes for {hashes?.Count ?? 0} files via {source}", uri: requestUri);
-                }
-                catch { }
+        var requestUri = MareFiles.ServerFilesGetSizesFullPath(baseCdn);
+        try
+        {
+            PublishDownloadEvent(EventSeverity.Informational, $"Requesting file sizes for {hashes?.Count ?? 0} files via {source}", uri: requestUri);
+        }
+        catch { }
         HttpResponseMessage response;
         try
         {
@@ -616,6 +821,62 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
+            // Special-case: Some services (e.g., PlayerSync) do not implement /files/getFileSizes and return 404.
+            // When direct-download is preferred/allowed, fall back to synthesizing per-file DirectDownloadUrl entries
+            // so we can stream files immediately without size metadata.
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                bool preferDirect = false;
+                try
+                {
+                    if (_serverConfigurationManager != null && _serverIndex.HasValue)
+                    {
+                        var cfg = _serverConfigurationManager.GetServerByIndex(_serverIndex.Value);
+                        if (cfg?.UseDirectDownload == true) preferDirect = true;
+                    }
+                }
+                catch { }
+                try
+                {
+                    if (!preferDirect && baseCdn != null && baseCdn.Host.Contains("playersync", StringComparison.OrdinalIgnoreCase))
+                        preferDirect = true;
+                }
+                catch { }
+
+                if (preferDirect && hashes != null && hashes.Count > 0 && baseCdn != null)
+                {
+                    PublishDownloadEvent(EventSeverity.Warning, "getFileSizes unavailable (404); using direct-download fallback for this server", uri: requestUri);
+                    Logger.LogInformation("Falling back to direct-download for {count} files due to 404 at {uri}", hashes.Count, requestUri);
+
+                    var fallback = new List<DownloadFileDto>(hashes.Count);
+                    foreach (var h in hashes)
+                    {
+                        Uri direct;
+                        try
+                        {
+                            direct = MareFiles.RequestRequestFileFullPath(baseCdn, h);
+                        }
+                        catch
+                        {
+                            direct = new Uri(baseCdn, $"/request/file?file={h}");
+                        }
+                        fallback.Add(new DownloadFileDto
+                        {
+                            Hash = h,
+                            // Set standard Url to base for host registration; direct path will be used for transfer
+                            Url = baseCdn.ToString(),
+                            DirectDownloadUrl = direct.ToString(),
+                            FileExists = true,
+                            Size = 0,
+                            RawSize = 0,
+                            IsForbidden = false,
+                            ForbiddenBy = string.Empty,
+                        });
+                    }
+                    return fallback;
+                }
+            }
+
             PublishDownloadEvent(EventSeverity.Error, $"File size request failed with {response.StatusCode}: {Truncate(body, 256)}", uri: requestUri);
             Logger.LogWarning("File size request failed {status}: {body}", response.StatusCode, Truncate(body, 512));
             response.EnsureSuccessStatusCode();

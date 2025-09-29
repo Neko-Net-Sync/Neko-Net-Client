@@ -39,12 +39,13 @@ public class PairHandlerFactory
     private readonly ServerConfigurationManager _serverConfigManager;
     private readonly PluginWarningNotificationService _pluginWarningNotificationManager;
     private readonly PersonDownloadCoordinator _personDownloadCoordinator;
+    private readonly PersonApplyCoordinator _personApplyCoordinator;
 
     public PairHandlerFactory(ILoggerFactory loggerFactory, GameObjectHandlerFactory gameObjectHandlerFactory, IpcManager ipcManager,
         FileDownloadManagerFactory fileDownloadManagerFactory, DalamudUtilService dalamudUtilService,
         PluginWarningNotificationService pluginWarningNotificationManager, IHostApplicationLifetime hostApplicationLifetime,
         FileCacheManager fileCacheManager, MareMediator mareMediator, PlayerPerformanceService playerPerformanceService,
-        ServerConfigurationManager serverConfigManager, PersonDownloadCoordinator personDownloadCoordinator)
+        ServerConfigurationManager serverConfigManager, PersonDownloadCoordinator personDownloadCoordinator, PersonApplyCoordinator personApplyCoordinator)
     {
         _loggerFactory = loggerFactory;
         _gameObjectHandlerFactory = gameObjectHandlerFactory;
@@ -58,6 +59,7 @@ public class PairHandlerFactory
         _playerPerformanceService = playerPerformanceService;
         _serverConfigManager = serverConfigManager;
         _personDownloadCoordinator = personDownloadCoordinator;
+        _personApplyCoordinator = personApplyCoordinator;
     }
 
     /// <summary>
@@ -71,27 +73,34 @@ public class PairHandlerFactory
         {
             if (!string.IsNullOrEmpty(pair.ApiUrlOverride))
             {
-                string Normalize(string value)
+                string NormalizeToHost(string value)
                 {
                     if (string.IsNullOrWhiteSpace(value)) return string.Empty;
                     try
                     {
                         var uri = new Uri(value, UriKind.Absolute);
-                        var builder = new UriBuilder(uri);
+                        var builder = new UriBuilder(uri)
+                        {
+                            Port = -1
+                        };
+                        // Normalize ws(s) to http(s) to ensure TryCreate works with both styles, but we only compare hosts
                         if (string.Equals(builder.Scheme, "wss", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "https";
                         else if (string.Equals(builder.Scheme, "ws", StringComparison.OrdinalIgnoreCase)) builder.Scheme = "http";
-                        builder.Port = -1;
-                        return builder.Uri.Host + builder.Uri.AbsolutePath.TrimEnd('/');
+                        return builder.Uri.Host;
                     }
                     catch
                     {
-                        return value.Trim().TrimEnd('/');
+                        // Best effort: if it's not a valid absolute URI, strip protocol-like prefixes and trailing slashes
+                        var trimmed = value.Trim().TrimEnd('/');
+                        // If there's a path segment, take only the part before the first '/'
+                        var slashIdx = trimmed.IndexOf('/');
+                        return slashIdx >= 0 ? trimmed.Substring(0, slashIdx) : trimmed;
                     }
                 }
 
-                var normalizedTarget = Normalize(pair.ApiUrlOverride);
+                var normalizedTarget = NormalizeToHost(pair.ApiUrlOverride);
                 var urls = _serverConfigManager.GetServerApiUrls();
-                var idx = Array.FindIndex(urls, u => string.Equals(Normalize(u), normalizedTarget, StringComparison.OrdinalIgnoreCase));
+                var idx = Array.FindIndex(urls, u => string.Equals(NormalizeToHost(u), normalizedTarget, StringComparison.OrdinalIgnoreCase));
                 if (idx >= 0) serverIndex = idx;
             }
         }
@@ -99,6 +108,6 @@ public class PairHandlerFactory
 
         return new PairHandler(_loggerFactory.CreateLogger<PairHandler>(), pair, _gameObjectHandlerFactory,
             _ipcManager, _fileDownloadManagerFactory.Create(serverIndex, pair.ApiUrlOverride), _pluginWarningNotificationManager, _dalamudUtilService, _hostApplicationLifetime,
-            _fileCacheManager, _mareMediator, _playerPerformanceService, _personDownloadCoordinator, _serverConfigManager);
+            _fileCacheManager, _mareMediator, _playerPerformanceService, _personDownloadCoordinator, _personApplyCoordinator, _serverConfigManager);
     }
 }
