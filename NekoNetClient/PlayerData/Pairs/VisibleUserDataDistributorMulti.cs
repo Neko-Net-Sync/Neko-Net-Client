@@ -37,6 +37,9 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
     // Track previous visible users per service and per configured server index
     private readonly ConcurrentDictionary<SyncService, HashSet<UserData>> _prevServiceVisible = new();
     private readonly ConcurrentDictionary<int, HashSet<UserData>> _prevConfiguredVisible = new();
+    // Track last pushed hash per service / configured index to push on changes regardless of visible deltas
+    private readonly ConcurrentDictionary<SyncService, string> _lastPushedHashByService = new();
+    private readonly ConcurrentDictionary<int, string> _lastPushedHashByConfigured = new();
 
     /// <summary>
     /// Creates a new multi-service distributor.
@@ -52,6 +55,9 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
         Mediator.Subscribe<CharacterDataCreatedMessage>(this, (msg) =>
         {
             _lastCreatedData = msg.CharacterData;
+            // Invalidate last pushed state so we force a push on all connected targets
+            foreach (var svc in Enum.GetValues<SyncService>()) _lastPushedHashByService.TryRemove(svc, out _);
+            foreach (var k in _lastPushedHashByConfigured.Keys.ToList()) _lastPushedHashByConfigured.TryRemove(k, out _);
             _ = PushToAllAsync(force: true);
         });
 
@@ -69,6 +75,7 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
     private void OnFrame()
     {
         if (!_dalamud.GetIsPlayerPresent() || _lastCreatedData == null) return;
+        var currentHash = _lastCreatedData?.DataHash?.Value ?? string.Empty;
 
         // Services
         foreach (var svc in Enum.GetValues<SyncService>())
@@ -78,9 +85,10 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
             var visible = pm.GetVisibleUsers();
             var prev = _prevServiceVisible.GetOrAdd(svc, _ => new HashSet<UserData>(NekoNet.API.Data.Comparer.UserDataComparer.Instance));
             var newVisible = visible.Where(u => !prev.Contains(u)).ToList();
-            if (newVisible.Count > 0)
+            var hashChanged = !_lastPushedHashByService.TryGetValue(svc, out var lastHash) || !string.Equals(lastHash, currentHash, StringComparison.Ordinal);
+            if (newVisible.Count > 0 || hashChanged)
             {
-                _ = PushToServiceAsync(svc);
+                _ = PushToServiceAsync(svc, force: hashChanged);
                 prev.Clear();
                 foreach (var v in visible) prev.Add(v);
             }
@@ -95,9 +103,10 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
             var visible = pm.GetVisibleUsers();
             var prev = _prevConfiguredVisible.GetOrAdd(idx, _ => new HashSet<UserData>(NekoNet.API.Data.Comparer.UserDataComparer.Instance));
             var newVisible = visible.Where(u => !prev.Contains(u)).ToList();
-            if (newVisible.Count > 0)
+            var hashChanged = !_lastPushedHashByConfigured.TryGetValue(idx, out var lastHash) || !string.Equals(lastHash, currentHash, StringComparison.Ordinal);
+            if (newVisible.Count > 0 || hashChanged)
             {
-                _ = PushToConfiguredAsync(idx);
+                _ = PushToConfiguredAsync(idx, force: hashChanged);
                 prev.Clear();
                 foreach (var v in visible) prev.Add(v);
             }
@@ -132,6 +141,9 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
             var pm = _multi.GetPairManagerForService(svc);
             var recipients = pm.GetVisibleUsers();
             if (recipients.Count == 0) return;
+            var currentHash = _lastCreatedData?.DataHash?.Value ?? string.Empty;
+            if (!force && _lastPushedHashByService.TryGetValue(svc, out var lastHash) && string.Equals(lastHash, currentHash, StringComparison.Ordinal))
+                return;
 
             await _pushLock.WaitAsync().ConfigureAwait(false);
             try
@@ -140,6 +152,7 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
                 // Upload files against the appropriate CDN is handled inside FileUploadManager via global orchestrator (uses host mapping)
                 await _upload.UploadFiles(data, recipients).ConfigureAwait(false);
                 await _multi.PushCharacterDataAsync(svc, data, recipients).ConfigureAwait(false);
+                _lastPushedHashByService[svc] = currentHash;
             }
             finally { _pushLock.Release(); }
         }
@@ -158,6 +171,9 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
             var pm = _multi.GetPairManagerForConfigured(serverIndex);
             var recipients = pm.GetVisibleUsers();
             if (recipients.Count == 0) return;
+            var currentHash = _lastCreatedData?.DataHash?.Value ?? string.Empty;
+            if (!force && _lastPushedHashByConfigured.TryGetValue(serverIndex, out var lastHash) && string.Equals(lastHash, currentHash, StringComparison.Ordinal))
+                return;
 
             await _pushLock.WaitAsync().ConfigureAwait(false);
             try
@@ -165,6 +181,7 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
                 var data = VariousExtensions.DeepClone(_lastCreatedData!);
                 await _upload.UploadFiles(data, recipients, serverIndex).ConfigureAwait(false);
                 await _multi.PushCharacterDataConfiguredAsync(serverIndex, data, recipients).ConfigureAwait(false);
+                _lastPushedHashByConfigured[serverIndex] = currentHash;
             }
             finally { _pushLock.Release(); }
         }
