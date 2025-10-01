@@ -17,6 +17,7 @@ using NekoNetClient.PlayerData.Pairs;
 using NekoNetClient.Services.Events;
 using NekoNetClient.WebAPI.Files.Models;
 using System.Numerics;
+using NekoNetClient.WebAPI.SignalR;
 
 namespace NekoNetClient.Services.Mediator;
 
@@ -103,6 +104,13 @@ public record CreateCacheForObjectMessage(GameObjectHandler ObjectToCreateFor) :
 public record ClearCacheForObjectMessage(GameObjectHandler ObjectToCreateFor) : SameThreadMessage;
 /// <summary>Character data was created (same-thread).</summary>
 public record CharacterDataCreatedMessage(CharacterData CharacterData) : SameThreadMessage;
+public record VisibleUserCameOnlineMessage(SyncService Service, UserData User) : SameThreadMessage;
+public record VisibleUserCameOnlineConfiguredMessage(int ServerIndex, UserData User) : SameThreadMessage;
+/// <summary>
+/// Ask connected hubs to request the latest character data from a specific user. ApiUrlOverride can scope to a specific
+/// service or configured server (pass null to broadcast to all connected hubs).
+/// </summary>
+public record RequestUserDataForUidMessage(UserData User, string? ApiUrlOverride = null) : SameThreadMessage;
 /// <summary>Character data has been analyzed.</summary>
 public record CharacterDataAnalyzedMessage : MessageBase;
 /// <summary>Penumbra started a redraw.</summary>

@@ -751,6 +751,12 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             else
             {
                 Logger.LogTrace("{this} visibility changed, now: {visi}, no cached data exists", this, IsVisible);
+                try
+                {
+                    // Proactively request latest data for this UID from the appropriate hub(s)
+                    Mediator.Publish(new RequestUserDataForUidMessage(Pair.UserData, Pair.ApiUrlOverride));
+                }
+                catch { }
             }
         }
         else if (_charaHandler?.Address == nint.Zero && IsVisible)

@@ -96,6 +96,9 @@ namespace NekoNetClient.WebAPI.SignalR
             _cfg = cfg;
             _contextMenu = contextMenu;
             _rolling = rolling;
+
+            // Listen for pull requests for user data (when a player becomes visible without us having cached data)
+            Mediator.Subscribe<RequestUserDataForUidMessage>(this, msg => _ = RequestUserDataInternalAsync(msg));
         }
 
         public HubConnection? Get(SyncService svc) => _hubs.TryGetValue(svc, out var hub) ? hub : null;
@@ -559,6 +562,12 @@ namespace NekoNetClient.WebAPI.SignalR
                     pm.MarkPairOnline(dto, sendNotif: false);
                     var key = GetServiceApiBase(svc);
                     _rolling.Online(dto.User.UID, key);
+                    // If we already have our latest character data, proactively push just to this newly online pair
+                    try
+                    {
+                        Mediator.Publish(new VisibleUserCameOnlineMessage(svc, dto.User));
+                    }
+                    catch { }
                 }
                 catch { }
             });
@@ -611,6 +620,12 @@ namespace NekoNetClient.WebAPI.SignalR
                     pm.MarkPairOnline(dto, sendNotif: false);
                     var key = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
                     _rolling.Online(dto.User.UID, key);
+                    // Notify distributor to target-push to this user if we already have data
+                    try
+                    {
+                        Mediator.Publish(new VisibleUserCameOnlineConfiguredMessage(serverIndex, dto.User));
+                    }
+                    catch { }
                 }
                 catch { }
             });
@@ -803,6 +818,40 @@ namespace NekoNetClient.WebAPI.SignalR
                 try { await hub.DisposeAsync(); } catch { }
             }
             _hubs.Clear();
+        }
+
+        private async Task RequestUserDataInternalAsync(RequestUserDataForUidMessage msg)
+        {
+            // Route by ApiUrlOverride when provided; otherwise broadcast to all connected hubs
+            var userDto = new UserDto(msg.User);
+            bool TargetMatchesService(SyncService svc)
+                => string.IsNullOrEmpty(msg.ApiUrlOverride) || string.Equals(GetServiceApiBase(svc).TrimEnd('/'), msg.ApiUrlOverride!.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+            bool TargetMatchesConfigured(int idx)
+                => string.IsNullOrEmpty(msg.ApiUrlOverride) || string.Equals(GetConfiguredResolvedUrl(idx).TrimEnd('/'), msg.ApiUrlOverride!.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+
+            // Try known method names for compatibility across servers
+            static async Task TryInvokeAsync(HubConnection hub, string method, UserDto dto)
+            {
+                try { await hub.InvokeAsync(method, dto).ConfigureAwait(false); } catch { }
+            }
+
+            foreach (var kv in _hubs)
+            {
+                if (kv.Value.State != HubConnectionState.Connected) continue;
+                if (!TargetMatchesService(kv.Key)) continue;
+                await TryInvokeAsync(kv.Value, "UserRequestData", userDto).ConfigureAwait(false);
+                await TryInvokeAsync(kv.Value, "RequestUserData", userDto).ConfigureAwait(false);
+                await TryInvokeAsync(kv.Value, "UserRequestCharacterData", userDto).ConfigureAwait(false);
+            }
+
+            foreach (var kv in _cfgHubs)
+            {
+                if (kv.Value.State != HubConnectionState.Connected) continue;
+                if (!TargetMatchesConfigured(kv.Key)) continue;
+                await TryInvokeAsync(kv.Value, "UserRequestData", userDto).ConfigureAwait(false);
+                await TryInvokeAsync(kv.Value, "RequestUserData", userDto).ConfigureAwait(false);
+                await TryInvokeAsync(kv.Value, "UserRequestCharacterData", userDto).ConfigureAwait(false);
+            }
         }
     }
 }

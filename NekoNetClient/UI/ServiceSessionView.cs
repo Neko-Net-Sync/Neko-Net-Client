@@ -507,6 +507,21 @@ internal sealed class ServiceSessionView
         ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - pushSize.X / 2);
         ImGui.TextColored(ImGuiColors.DalamudGrey, lastPushText);
 
+        // Reconnect on Login/DC Travel toggle (per configured server)
+        try
+        {
+            var storage = _servers.GetServerByIndex(serverIndex);
+            bool autoReconnect = storage.ReconnectOnLoginOrDcTravel;
+            var chkWidth = ImGui.CalcTextSize("Reconnect on login/DC Travel").X + ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X;
+            ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - chkWidth / 2);
+            if (ImGui.Checkbox("Reconnect on login/DC Travel##reconn" + serverIndex, ref autoReconnect))
+            {
+                storage.ReconnectOnLoginOrDcTravel = autoReconnect;
+                _servers.Save();
+            }
+        }
+        catch { }
+
         // Centered UID (click to copy) for this configured server
         try
         {

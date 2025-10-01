@@ -114,6 +114,7 @@ public sealed class Plugin : IDalamudPlugin
             collection.AddSingleton<ApiController>();
             collection.AddSingleton<PerformanceCollectorService>();
             collection.AddSingleton<HubFactory>();
+            collection.AddSingleton<AutoReconnectService>();
             collection.AddSingleton<FileUploadManager>();
             collection.AddSingleton<FileTransferOrchestrator>();
             collection.AddSingleton<MarePlugin>();
@@ -269,6 +270,7 @@ public sealed class Plugin : IDalamudPlugin
             collection.AddHostedService(p => p.GetRequiredService<MarePlugin>());
             collection.AddHostedService(p => p.GetRequiredService<SyncFacadeEventLogger>());
             collection.AddHostedService(p => p.GetRequiredService<SyncFacadeOrchestrator>());
+            collection.AddHostedService(p => p.GetRequiredService<AutoReconnectService>());
         })
         .Build();
 

@@ -66,6 +66,33 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
             _ = PushToConfiguredAsync(msg.ServerIndex, force: true);
         });
 
+        // Targeted push when a single user comes online for a given scope
+        Mediator.Subscribe<VisibleUserCameOnlineMessage>(this, (msg) =>
+        {
+            try
+            {
+                if (_lastCreatedData == null) return;
+                var pm = _multi.GetPairManagerForService(msg.Service);
+                // Only push if they are visible in this scope
+                var isVisible = pm.GetVisibleUsers().Any(u => u.UID == msg.User.UID);
+                if (!isVisible) return;
+                _ = PushToServiceAsync(msg.Service, force: false, recipientsOverride: new List<UserData> { msg.User });
+            }
+            catch { }
+        });
+        Mediator.Subscribe<VisibleUserCameOnlineConfiguredMessage>(this, (msg) =>
+        {
+            try
+            {
+                if (_lastCreatedData == null) return;
+                var pm = _multi.GetPairManagerForConfigured(msg.ServerIndex);
+                var isVisible = pm.GetVisibleUsers().Any(u => u.UID == msg.User.UID);
+                if (!isVisible) return;
+                _ = PushToConfiguredAsync(msg.ServerIndex, force: false, recipientsOverride: new List<UserData> { msg.User });
+            }
+            catch { }
+        });
+
         Mediator.Subscribe<DelayedFrameworkUpdateMessage>(this, (_) => OnFrame());
     }
 
@@ -88,7 +115,8 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
             var hashChanged = !_lastPushedHashByService.TryGetValue(svc, out var lastHash) || !string.Equals(lastHash, currentHash, StringComparison.Ordinal);
             if (newVisible.Count > 0 || hashChanged)
             {
-                _ = PushToServiceAsync(svc, force: hashChanged);
+                // If hash didn't change, push just to the new folks; if it changed, push to everyone.
+                _ = PushToServiceAsync(svc, force: hashChanged, recipientsOverride: hashChanged ? null : newVisible);
                 prev.Clear();
                 foreach (var v in visible) prev.Add(v);
             }
@@ -106,7 +134,8 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
             var hashChanged = !_lastPushedHashByConfigured.TryGetValue(idx, out var lastHash) || !string.Equals(lastHash, currentHash, StringComparison.Ordinal);
             if (newVisible.Count > 0 || hashChanged)
             {
-                _ = PushToConfiguredAsync(idx, force: hashChanged);
+                // If hash didn't change, push just to the new folks; if it changed, push to everyone.
+                _ = PushToConfiguredAsync(idx, force: hashChanged, recipientsOverride: hashChanged ? null : newVisible);
                 prev.Clear();
                 foreach (var v in visible) prev.Add(v);
             }
@@ -132,17 +161,19 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
     /// <summary>
     /// Pushes the current data to all visible users on a single service.
     /// </summary>
-    private async Task PushToServiceAsync(SyncService svc, bool force = false)
+    private async Task PushToServiceAsync(SyncService svc, bool force = false, IReadOnlyList<UserData>? recipientsOverride = null)
     {
         try
         {
             if (_lastCreatedData == null) return;
             if (_multi.GetState(svc) != Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected) return;
             var pm = _multi.GetPairManagerForService(svc);
-            var recipients = pm.GetVisibleUsers();
+            var recipientsRo = recipientsOverride ?? pm.GetVisibleUsers();
+            var recipients = recipientsRo as List<UserData> ?? new List<UserData>(recipientsRo);
             if (recipients.Count == 0) return;
             var currentHash = _lastCreatedData?.DataHash?.Value ?? string.Empty;
-            if (!force && _lastPushedHashByService.TryGetValue(svc, out var lastHash) && string.Equals(lastHash, currentHash, StringComparison.Ordinal))
+            // If we have an explicit recipient override (e.g., newly visible users), bypass hash gating so they still get current data.
+            if (recipientsOverride == null && !force && _lastPushedHashByService.TryGetValue(svc, out var lastHash) && string.Equals(lastHash, currentHash, StringComparison.Ordinal))
                 return;
 
             await _pushLock.WaitAsync().ConfigureAwait(false);
@@ -162,17 +193,19 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
     /// <summary>
     /// Pushes the current data to all visible users on a configured server index.
     /// </summary>
-    private async Task PushToConfiguredAsync(int serverIndex, bool force = false)
+    private async Task PushToConfiguredAsync(int serverIndex, bool force = false, IReadOnlyList<UserData>? recipientsOverride = null)
     {
         try
         {
             if (_lastCreatedData == null) return;
             if (_multi.GetConfiguredState(serverIndex) != Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected) return;
             var pm = _multi.GetPairManagerForConfigured(serverIndex);
-            var recipients = pm.GetVisibleUsers();
+            var recipientsRo = recipientsOverride ?? pm.GetVisibleUsers();
+            var recipients = recipientsRo as List<UserData> ?? new List<UserData>(recipientsRo);
             if (recipients.Count == 0) return;
             var currentHash = _lastCreatedData?.DataHash?.Value ?? string.Empty;
-            if (!force && _lastPushedHashByConfigured.TryGetValue(serverIndex, out var lastHash) && string.Equals(lastHash, currentHash, StringComparison.Ordinal))
+            // If we have an explicit recipient override (e.g., newly visible users), bypass hash gating so they still get current data.
+            if (recipientsOverride == null && !force && _lastPushedHashByConfigured.TryGetValue(serverIndex, out var lastHash) && string.Equals(lastHash, currentHash, StringComparison.Ordinal))
                 return;
 
             await _pushLock.WaitAsync().ConfigureAwait(false);
