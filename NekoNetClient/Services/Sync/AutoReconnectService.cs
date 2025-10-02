@@ -19,6 +19,10 @@ public sealed class AutoReconnectService : DisposableMediatorSubscriberBase, IHo
     private readonly MultiHubManager _multi;
     private readonly ServerConfigurationManager _servers;
     private readonly Services.DalamudUtilService _dalamud;
+    private readonly SemaphoreSlim _runGate = new(1, 1);
+    private DateTime _nextAllowedRunUtc = DateTime.MinValue;
+    private static readonly TimeSpan DebounceWindow = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(4);
 
     public AutoReconnectService(ILogger<AutoReconnectService> logger, MareMediator mediator,
         MultiHubManager multi, ServerConfigurationManager servers, Services.DalamudUtilService dalamud)
@@ -34,36 +38,83 @@ public sealed class AutoReconnectService : DisposableMediatorSubscriberBase, IHo
 
     private async Task ReconnectFlaggedAsync()
     {
-        // Iterate all configured servers and reconnect those flagged
-        var count = _servers.GetServerCount();
-        for (int i = 0; i < count; i++)
-        {
-            try
-            {
-                var s = _servers.GetServerByIndex(i);
-                if (!s.ReconnectOnLoginOrDcTravel) continue;
+        // Simple debounce to avoid running multiple times during rapid zone/login events
+        var now = DateTime.UtcNow;
+        if (now < _nextAllowedRunUtc) return;
+        _nextAllowedRunUtc = now + DebounceWindow;
 
-                // Attempt connect for configured server index
-                await _multi.ConnectConfiguredAsync(i).ConfigureAwait(false);
-            }
-            catch { /* ignore individual server failures */ }
-        }
-
-        // Also attempt to bring main services up if flags are set on the current server
+        await _runGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var idx = _servers.CurrentServerIndex;
-            var cur = _servers.GetServerByIndex(idx);
-            if (cur.ReconnectOnLoginOrDcTravel)
+            // Small delay to ensure tokens/world state are ready after login/zone switch
+            await Task.Delay(500).ConfigureAwait(false);
+
+            Logger.LogDebug("[AutoReconnect] Triggered — checking flagged servers");
+
+            // Iterate all configured servers and reconnect those flagged
+            var count = _servers.GetServerCount();
+            for (int i = 0; i < count; i++)
             {
-                // Bring up known main services (those that are enabled/configured in MultiHubManager)
-                foreach (var svc in System.Enum.GetValues<SyncService>())
+                try
                 {
-                    try { await _multi.ConnectAsync(svc).ConfigureAwait(false); } catch { }
+                    var s = _servers.GetServerByIndex(i);
+                    if (!s.ReconnectOnLoginOrDcTravel) continue;
+
+                    Logger.LogDebug("[AutoReconnect] Connecting configured index {idx} ({name})", i, s.ServerName);
+                    await _multi.ConnectConfiguredAsync(i).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "[AutoReconnect] ConnectConfiguredAsync failed for index {idx}", i);
                 }
             }
+
+            // Also attempt to bring main services up if flags are set on the current server
+            try
+            {
+                var idx = _servers.CurrentServerIndex;
+                var cur = _servers.GetServerByIndex(idx);
+                if (cur.ReconnectOnLoginOrDcTravel)
+                {
+                    foreach (var svc in System.Enum.GetValues<SyncService>())
+                    {
+                        try { Logger.LogDebug("[AutoReconnect] Ensuring service {svc} is connected", svc); await _multi.ConnectAsync(svc).ConfigureAwait(false); } catch { }
+                    }
+                }
+            }
+            catch { }
+
+            // Perform one follow-up retry for configured servers that are still disconnected
+            try
+            {
+                await Task.Delay(RetryDelay).ConfigureAwait(false);
+                for (int i = 0; i < count; i++)
+                {
+                    try
+                    {
+                        var s = _servers.GetServerByIndex(i);
+                        if (!s.ReconnectOnLoginOrDcTravel) continue;
+                        var state = _multi.GetConfiguredState(i);
+                        if (state != Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected
+                            && state != Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connecting
+                            && state != Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Reconnecting)
+                        {
+                            Logger.LogDebug("[AutoReconnect] Retry connecting configured index {idx} ({name}), state={state}", i, s.ServerName, state);
+                            await _multi.ConnectConfiguredAsync(i).ConfigureAwait(false);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogDebug(ex, "[AutoReconnect] Retry ConnectConfiguredAsync failed for index {idx}", i);
+                    }
+                }
+            }
+            catch { }
         }
-        catch { }
+        finally
+        {
+            _runGate.Release();
+        }
     }
 
     public Task StartAsync(CancellationToken cancellationToken)

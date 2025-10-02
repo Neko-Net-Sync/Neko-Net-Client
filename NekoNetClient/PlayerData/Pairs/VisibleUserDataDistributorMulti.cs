@@ -151,8 +151,8 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
         await PushToServiceAsync(SyncService.Lightless, force);
         await PushToServiceAsync(SyncService.TeraSync, force);
 
-        // Push to first 64 configured slots (cheap check gates by connection state)
-        for (int idx = 0; idx < 64; idx++)
+        // Push to first 150 configured slots (cheap check gates by connection state)
+        for (int idx = 0; idx < 150; idx++)
         {
             await PushToConfiguredAsync(idx, force);
         }
