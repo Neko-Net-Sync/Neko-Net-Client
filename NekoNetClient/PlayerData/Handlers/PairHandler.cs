@@ -577,11 +577,21 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                     await _pairDownloadTask.ConfigureAwait(false);
                 }
 
+                // Snapshot handler to avoid race where _charaHandler becomes null mid-iteration
+                var handlerSnapshot = _charaHandler;
+                if (handlerSnapshot == null || handlerSnapshot.Address == nint.Zero)
+                {
+                    Logger.LogDebug("[BASE-{appBase}] Handler missing/invalid before download start; deferring application and caching data", applicationBase);
+                    _cachedData = charaData;
+                    _forceApplyMods = true;
+                    return;
+                }
+
                 Logger.LogDebug("[BASE-{appBase}] Downloading missing files for player {name}, {kind}", applicationBase, PlayerName, updatedData);
 
                 Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, nameof(PairHandler), EventSeverity.Informational,
                     $"Starting download for {toDownloadReplacements.Count} files") { Server = (Pair.ApiUrlOverride).ToServerLabel() }));
-                var toDownloadFiles = await _downloadManager.InitiateDownloadList(_charaHandler!, toDownloadReplacements, downloadToken).ConfigureAwait(false);
+                var toDownloadFiles = await _downloadManager.InitiateDownloadList(handlerSnapshot, toDownloadReplacements, downloadToken).ConfigureAwait(false);
 
                 if (!_playerPerformanceService.ComputeAndAutoPauseOnVRAMUsageThresholds(this, charaData, toDownloadFiles))
                 {
@@ -592,7 +602,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                 // Coalesce downloads across services/handlers by the file-set signature to avoid redundant concurrent downloads
                 var signature = string.Join(',', toDownloadReplacements.Select(r => r.Hash).OrderBy(h => h, StringComparer.Ordinal));
                 _pairDownloadTask = _personDownloadCoordinator.RunCoalescedAsync(signature,
-                    () => _downloadManager.DownloadFiles(_charaHandler!, toDownloadReplacements, downloadToken));
+                    () => _downloadManager.DownloadFiles(handlerSnapshot, toDownloadReplacements, downloadToken));
 
                 await _pairDownloadTask.ConfigureAwait(false);
 
@@ -658,16 +668,35 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             _applicationId = Guid.NewGuid();
             Logger.LogDebug("[BASE-{applicationId}] Starting application task for {this}: {appId}", applicationBase, this, _applicationId);
 
-            Logger.LogDebug("[{applicationId}] Waiting for initial draw for for {handler}", _applicationId, _charaHandler);
-            await _dalamudUtil.WaitWhileCharacterIsDrawing(Logger, _charaHandler!, _applicationId, 30000, token).ConfigureAwait(false);
+            var handlerSnapshot = _charaHandler;
+            if (handlerSnapshot == null || handlerSnapshot.Address == nint.Zero)
+            {
+                // Character vanished between scheduling and apply start: cache and defer
+                _forceApplyMods = true;
+                _cachedData = charaData;
+                Logger.LogDebug("[{applicationId}] Aborting apply early: handler/address invalid; will reapply on visibility", _applicationId);
+                return;
+            }
+
+            Logger.LogDebug("[{applicationId}] Waiting for initial draw for for {handler}", _applicationId, handlerSnapshot);
+            await _dalamudUtil.WaitWhileCharacterIsDrawing(Logger, handlerSnapshot, _applicationId, 30000, token).ConfigureAwait(false);
 
             token.ThrowIfCancellationRequested();
 
             if (updateModdedPaths)
             {
-                // ensure collection is set
-                var objIndex = await _dalamudUtil.RunOnFrameworkThread(() => _charaHandler!.GetGameObject()!.ObjectIndex).ConfigureAwait(false);
-                await _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, objIndex).ConfigureAwait(false);
+                // ensure collection is set; GameObject access must occur on the framework thread
+                var objIndex = await _dalamudUtil
+                    .RunOnFrameworkThread(() => (int?)handlerSnapshot.GetGameObject()?.ObjectIndex)
+                    .ConfigureAwait(false);
+                if (objIndex == null)
+                {
+                    _forceApplyMods = true;
+                    _cachedData = charaData;
+                    Logger.LogDebug("[{applicationId}] GameObject null during apply; deferring", _applicationId);
+                    return;
+                }
+                await _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, objIndex.Value).ConfigureAwait(false);
 
                 await _ipcManager.Penumbra.SetTemporaryModsAsync(Logger, _applicationId, _penumbraCollection,
                     moddedPaths.ToDictionary(k => k.Key.GamePath, k => k.Value, StringComparer.Ordinal)).ConfigureAwait(false);
@@ -824,7 +853,18 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             await _ipcManager.PetNames.SetPlayerData(PlayerCharacter, _cachedData.PetNamesData).ConfigureAwait(false);
         });
 
-        _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, _charaHandler.GetGameObject()!.ObjectIndex).GetAwaiter().GetResult();
+        try
+        {
+            var objIndex = _dalamudUtil.RunOnFrameworkThread(() => (int?)_charaHandler.GetGameObject()?.ObjectIndex).GetAwaiter().GetResult();
+            if (objIndex != null)
+            {
+                _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, objIndex.Value).GetAwaiter().GetResult();
+            }
+        }
+        catch
+        {
+            // If we cannot get an object index right now (e.g., not on framework or object not ready), we'll assign on first apply.
+        }
     }
 
     /// <summary>

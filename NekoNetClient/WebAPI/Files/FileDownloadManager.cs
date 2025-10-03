@@ -532,6 +532,13 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             FileStream? fileBlockStream = null;
             try
             {
+                // If the operation was cancelled before we got here (e.g., while waiting for slot/queue),
+                // skip decompression cleanly. The finally block below will still release the slot.
+                if (token.IsCancellationRequested)
+                {
+                    PublishDownloadEvent(EventSeverity.Warning, "Download cancelled before decompression", requestId: requestId, uri: fileGroup.First().DownloadUri);
+                    return;
+                }
                 if (_downloadStatus.TryGetValue(fileGroup.Key, out var status))
                 {
                     status.TransferredFiles = 1;
@@ -539,8 +546,18 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 }
                 if (!File.Exists(blockFile))
                 {
-                    PublishDownloadEvent(EventSeverity.Error, "Block file missing before decompression", requestId: requestId, uri: fileGroup.First().DownloadUri);
-                    throw new FileNotFoundException("Block file missing", blockFile);
+                    // Allow a brief window for the temp file to appear if IO scheduling lagged.
+                    for (int i = 0; i < 3 && !File.Exists(blockFile); i++)
+                    {
+                        try { await Task.Delay(100, token).ConfigureAwait(false); } catch { /* ignore */ }
+                    }
+
+                    if (!File.Exists(blockFile))
+                    {
+                        PublishDownloadEvent(EventSeverity.Error, "Block file missing before decompression", requestId: requestId, uri: fileGroup.First().DownloadUri);
+                        // Nothing to decompress; exit gracefully so finally can cleanup and release slot.
+                        return;
+                    }
                 }
                 else
                 {
@@ -594,8 +611,18 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "{dlName}: Error during block file read", fi.Name);
-                PublishDownloadEvent(EventSeverity.Error, "Error during block file read", requestId: requestId, uri: fileGroup.First().DownloadUri, ex: ex);
+                // If cancellation is requested by now, prefer a softer warning to avoid noisy error spam
+                // when users intentionally cancel downloads (e.g., visibility lost).
+                if (token.IsCancellationRequested)
+                {
+                    Logger.LogDebug(ex, "{dlName}: Cancellation during block file read/decompression", fi.Name);
+                    PublishDownloadEvent(EventSeverity.Warning, "Download cancelled during block processing", requestId: requestId, uri: fileGroup.First().DownloadUri, ex: ex);
+                }
+                else
+                {
+                    Logger.LogError(ex, "{dlName}: Error during block file read", fi.Name);
+                    PublishDownloadEvent(EventSeverity.Error, "Error during block file read", requestId: requestId, uri: fileGroup.First().DownloadUri, ex: ex);
+                }
             }
             finally
             {
