@@ -65,6 +65,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     private Guid _applicationId;
     private Task? _applicationTask;
     private CharacterData? _cachedData = null;
+    // Throttle for re-visibility data refresh pulls
+    private DateTime _lastVisibilityDataRequestUtc = DateTime.MinValue;
     private GameObjectHandler? _charaHandler;
     private readonly Dictionary<ObjectKind, Guid?> _customizeIds = [];
     private CombatData? _dataReceivedInDowntime;
@@ -751,13 +753,24 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             else
             {
                 Logger.LogTrace("{this} visibility changed, now: {visi}, no cached data exists", this, IsVisible);
-                try
-                {
-                    // Proactively request latest data for this UID from the appropriate hub(s)
-                    Mediator.Publish(new RequestUserDataForUidMessage(Pair.UserData, Pair.ApiUrlOverride));
-                }
-                catch { }
             }
+
+            // On any return to visibility, proactively request the latest data from the network.
+            // We still apply cached data immediately (if present) for fast visual restoration,
+            // then a fresh payload (if newer) will arrive and re-apply on top. Gate by a small cooldown.
+            try
+            {
+                var now = DateTime.UtcNow;
+                if (now - _lastVisibilityDataRequestUtc > TimeSpan.FromSeconds(5))
+                {
+                    // Broadcast to ALL connected hubs (no ApiUrlOverride) so each service/server
+                    // that knows this UID can respond with the freshest character data.
+                    Mediator.Publish(new RequestUserDataForUidMessage(Pair.UserData));
+                    Logger.LogDebug("[{appData}] Visibility regain: requested fresh data for {alias} ({uid}) via broadcast", appData, Pair.UserData.AliasOrUID, Pair.UserData.UID);
+                    _lastVisibilityDataRequestUtc = now;
+                }
+            }
+            catch { }
         }
         else if (_charaHandler?.Address == nint.Zero && IsVisible)
         {

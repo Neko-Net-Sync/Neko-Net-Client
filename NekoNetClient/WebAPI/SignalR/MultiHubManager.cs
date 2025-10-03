@@ -157,6 +157,112 @@ namespace NekoNetClient.WebAPI.SignalR
             return Array.Empty<OnlineUserIdentDto>();
         }
 
+        /// <summary>
+        /// Computes, for a given known service, how many users are online on this service
+        /// AND at least one other service/configured server. Uses RollingSyncRegistry only
+        /// (not PairManager visibility) so non-visible but online users are counted.
+        /// </summary>
+        public int GetCrossSyncOverlapCountForService(SyncService svc)
+        {
+            var key = GetServiceApiBase(svc).TrimEnd('/');
+
+            // Snapshot presence across all services. Count UIDs that include this key and any other distinct key.
+            var snap = _rolling.Snapshot();
+            if (snap.Count == 0) return 0;
+
+            int count = 0;
+            foreach (var kv in snap)
+            {
+                var services = kv.Value.Services;
+                // present on current service?
+                bool onThis = services.Any(s => string.Equals(s.TrimEnd('/'), key, StringComparison.OrdinalIgnoreCase));
+                if (!onThis) continue;
+                // present elsewhere too?
+                bool elsewhere = services.Any(s => !string.Equals(s.TrimEnd('/'), key, StringComparison.OrdinalIgnoreCase));
+                if (elsewhere) count++;
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// Returns the detailed list of UIDs (with optional names and their service keys) that are counted
+        /// for a given known service's cross-sync overlap.
+        /// </summary>
+        public IReadOnlyList<(string Uid, string? Name, IReadOnlyCollection<string> Services)> GetCrossSyncDetailsForService(SyncService svc)
+        {
+            var key = GetServiceApiBase(svc).TrimEnd('/');
+            var snap = _rolling.Snapshot();
+            if (snap.Count == 0) return Array.Empty<(string, string?, IReadOnlyCollection<string>)>();
+
+            var list = new List<(string, string?, IReadOnlyCollection<string>)>();
+            foreach (var kv in snap)
+            {
+                var services = kv.Value.Services;
+                bool onThis = services.Any(s => string.Equals(s.TrimEnd('/'), key, StringComparison.OrdinalIgnoreCase));
+                if (!onThis) continue;
+                bool elsewhere = services.Any(s => !string.Equals(s.TrimEnd('/'), key, StringComparison.OrdinalIgnoreCase));
+                if (elsewhere)
+                {
+                    list.Add((kv.Key, kv.Value.PlayerName, services));
+                }
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// Computes cross-sync overlap for a configured server index using RollingSyncRegistry presence only.
+        /// Counts UIDs online on this configured server and also online on any other distinct server.
+        /// </summary>
+        public int GetCrossSyncOverlapCountForConfigured(int serverIndex)
+        {
+            var key = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
+
+            var snap = _rolling.Snapshot();
+            if (snap.Count == 0) return 0;
+
+            int count = 0;
+            foreach (var kv in snap)
+            {
+                var services = kv.Value.Services;
+                bool onThis = services.Any(s => string.Equals(s.TrimEnd('/'), key, StringComparison.OrdinalIgnoreCase));
+                if (!onThis) continue;
+                bool elsewhere = services.Any(s => !string.Equals(s.TrimEnd('/'), key, StringComparison.OrdinalIgnoreCase));
+                if (elsewhere) count++;
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// Returns the detailed list of UIDs (with optional names and their service keys) that are counted
+        /// for a given configured server's cross-sync overlap.
+        /// </summary>
+        public IReadOnlyList<(string Uid, string? Name, IReadOnlyCollection<string> Services)> GetCrossSyncDetailsForConfigured(int serverIndex)
+        {
+            var key = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
+            var snap = _rolling.Snapshot();
+            if (snap.Count == 0) return Array.Empty<(string, string?, IReadOnlyCollection<string>)>();
+
+            var list = new List<(string, string?, IReadOnlyCollection<string>)>();
+            foreach (var kv in snap)
+            {
+                var services = kv.Value.Services;
+                bool onThis = services.Any(s => string.Equals(s.TrimEnd('/'), key, StringComparison.OrdinalIgnoreCase));
+                if (!onThis) continue;
+                bool elsewhere = services.Any(s => !string.Equals(s.TrimEnd('/'), key, StringComparison.OrdinalIgnoreCase));
+                if (elsewhere)
+                {
+                    list.Add((kv.Key, kv.Value.PlayerName, services));
+                }
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// Exposes a snapshot of cross-service presence for diagnostics (UID → service keys, name).
+        /// </summary>
+        public IReadOnlyDictionary<string, (IReadOnlyCollection<string> Services, string? PlayerName)> GetPresenceSnapshot()
+            => _rolling.Snapshot();
+
         public int? GetServerIndexForService(SyncService svc)
         {
             // No fixed mapping in the new configured model; return null
@@ -509,7 +615,16 @@ namespace NekoNetClient.WebAPI.SignalR
 
             hub.Closed += ex => { _log.LogDebug("[Service {svc}] Closed: {msg}", svc, ex?.Message); if (ex != null) _lastError[svc] = ex.Message; return Task.CompletedTask; };
             hub.Reconnecting += ex => { _log.LogDebug("[Service {svc}] Reconnecting: {msg}", svc, ex?.Message); if (ex != null) _lastError[svc] = ex.Message; return Task.CompletedTask; };
-            hub.Reconnected += id => { _log.LogDebug("[Service {svc}] Reconnected: {id}", svc, id); _lastError.TryRemove(svc, out _); return Task.CompletedTask; };
+            hub.Reconnected += id =>
+            {
+                _log.LogDebug("[Service {svc}] Reconnected: {id}", svc, id);
+                _lastError.TryRemove(svc, out _);
+                // On reconnection, proactively request fresh character data for all currently visible users in this scope
+                try { TriggerVisibleUserPullsForService(svc); } catch { }
+                // Fire a small deferred retry to ensure pulls happen after online/pairs complete
+                _ = Task.Run(async () => { try { await Task.Delay(750).ConfigureAwait(false); TriggerVisibleUserPullsForService(svc); } catch { } });
+                return Task.CompletedTask;
+            };
 
             return hub;
         }
@@ -534,7 +649,16 @@ namespace NekoNetClient.WebAPI.SignalR
 
             hub.Closed += ex => { _log.LogDebug("[Configured #{idx}] Closed: {msg}", serverIndex, ex?.Message); if (ex != null) _cfgLastError[serverIndex] = ex.Message; return Task.CompletedTask; };
             hub.Reconnecting += ex => { _log.LogDebug("[Configured #{idx}] Reconnecting: {msg}", serverIndex, ex?.Message); if (ex != null) _cfgLastError[serverIndex] = ex.Message; return Task.CompletedTask; };
-            hub.Reconnected += id => { _log.LogDebug("[Configured #{idx}] Reconnected: {id}", serverIndex, id); _cfgLastError.TryRemove(serverIndex, out _); return Task.CompletedTask; };
+            hub.Reconnected += id =>
+            {
+                _log.LogDebug("[Configured #{idx}] Reconnected: {id}", serverIndex, id);
+                _cfgLastError.TryRemove(serverIndex, out _);
+                // On reconnection, proactively request fresh character data for all currently visible users in this configured scope
+                try { TriggerVisibleUserPullsForConfigured(serverIndex); } catch { }
+                // Fire a small deferred retry to ensure pulls happen after online/pairs complete
+                _ = Task.Run(async () => { try { await Task.Delay(750).ConfigureAwait(false); TriggerVisibleUserPullsForConfigured(serverIndex); } catch { } });
+                return Task.CompletedTask;
+            };
 
             return hub;
         }
@@ -568,10 +692,41 @@ namespace NekoNetClient.WebAPI.SignalR
                         Mediator.Publish(new VisibleUserCameOnlineMessage(svc, dto.User));
                     }
                     catch { }
+
+                    // If this user is already visible locally, also request a fresh inbound payload from this service
+                    try
+                    {
+                        var pair = pm.GetPairByUID(dto.User.UID);
+                        if (pair?.IsVisible == true)
+                        {
+                            var apiBase = GetServiceApiBase(svc).TrimEnd('/');
+                            Mediator.Publish(new RequestUserDataForUidMessage(dto.User, apiBase));
+                            // small delayed retry to avoid races with name/ident init
+                            _ = Task.Run(async () => { try { await Task.Delay(500).ConfigureAwait(false); Mediator.Publish(new RequestUserDataForUidMessage(dto.User, apiBase)); } catch { } });
+                        }
+                    }
+                    catch { }
                 }
                 catch { }
             });
-            hub.On<UserDto>("Client_UserSendOffline", dto => { try { pm.MarkPairOffline(dto.User); } catch { } });
+            hub.On<UserDto>("Client_UserSendOffline", dto =>
+            {
+                try
+                {
+                    var key = GetServiceApiBase(svc).TrimEnd('/');
+                    _rolling.Offline(dto.User.UID, key);
+                    // Only mark offline if the user is not online on any other hub/server
+                    if (!_rolling.IsOnlineElsewhere(dto.User.UID, key))
+                    {
+                        pm.MarkPairOffline(dto.User);
+                    }
+                    else
+                    {
+                        _log.LogDebug("[Service {svc}] Suppressing offline for {uid} (still online elsewhere)", svc, dto.User.UID);
+                    }
+                }
+                catch { }
+            });
             hub.On<OnlineUserCharaDataDto>("Client_UserReceiveCharacterData", dto => { try { pm.ReceiveCharaData(dto); } catch { } });
             hub.On<UserPermissionsDto>("Client_UserUpdateOtherPairPermissions", dto => { try { pm.UpdatePairPermissions(dto); } catch { } });
             hub.On<UserPermissionsDto>("Client_UserUpdateSelfPairPermissions", dto => { try { pm.UpdateSelfPairPermissions(dto); } catch { } });
@@ -596,6 +751,28 @@ namespace NekoNetClient.WebAPI.SignalR
             hub.On<GroupPairFullInfoDto>("Client_GroupPairJoined", dto => { try { pm.AddGroupPair(dto); } catch { } });
             hub.On<GroupPairDto>("Client_GroupPairLeft", dto => { try { pm.RemoveGroupPair(dto); } catch { } });
             hub.On<GroupDto>("Client_GroupDelete", dto => { try { pm.RemoveGroup(dto.Group); } catch { } });
+        }
+
+        private void TriggerVisibleUserPullsForService(SyncService svc)
+        {
+            try
+            {
+                var pm = GetPairManagerForService(svc);
+                var visible = pm.GetVisibleUsers();
+                if (visible.Count == 0)
+                {
+                    // Fallback: use main manager's currently visible users to seed pulls for this service
+                    try { visible = _mainPairs.GetVisibleUsers(); } catch { }
+                }
+                if (visible.Count == 0) return;
+                var apiBase = GetServiceApiBase(svc).TrimEnd('/');
+                _log.LogDebug("[Reconnected Pull] Service {svc}: requesting data for {count} visible users", svc, visible.Count);
+                foreach (var user in visible)
+                {
+                    try { Mediator.Publish(new RequestUserDataForUidMessage(user, apiBase)); } catch { }
+                }
+            }
+            catch { }
         }
 
         private void RegisterMareEventHandlersConfigured(int serverIndex, HubConnection hub)
@@ -626,10 +803,39 @@ namespace NekoNetClient.WebAPI.SignalR
                         Mediator.Publish(new VisibleUserCameOnlineConfiguredMessage(serverIndex, dto.User));
                     }
                     catch { }
+
+                    // If this user is already visible locally, also request a fresh inbound payload from this configured server
+                    try
+                    {
+                        var pair = pm.GetPairByUID(dto.User.UID);
+                        if (pair?.IsVisible == true)
+                        {
+                            var apiBase = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
+                            Mediator.Publish(new RequestUserDataForUidMessage(dto.User, apiBase));
+                            _ = Task.Run(async () => { try { await Task.Delay(500).ConfigureAwait(false); Mediator.Publish(new RequestUserDataForUidMessage(dto.User, apiBase)); } catch { } });
+                        }
+                    }
+                    catch { }
                 }
                 catch { }
             });
-            hub.On<UserDto>("Client_UserSendOffline", dto => { try { pm.MarkPairOffline(dto.User); } catch { } });
+            hub.On<UserDto>("Client_UserSendOffline", dto =>
+            {
+                try
+                {
+                    var key = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
+                    _rolling.Offline(dto.User.UID, key);
+                    if (!_rolling.IsOnlineElsewhere(dto.User.UID, key))
+                    {
+                        pm.MarkPairOffline(dto.User);
+                    }
+                    else
+                    {
+                        _log.LogDebug("[Configured #{idx}] Suppressing offline for {uid} (still online elsewhere)", serverIndex, dto.User.UID);
+                    }
+                }
+                catch { }
+            });
             hub.On<OnlineUserCharaDataDto>("Client_UserReceiveCharacterData", dto => { try { pm.ReceiveCharaData(dto); } catch { } });
             hub.On<UserPermissionsDto>("Client_UserUpdateOtherPairPermissions", dto => { try { pm.UpdatePairPermissions(dto); } catch { } });
             hub.On<UserPermissionsDto>("Client_UserUpdateSelfPairPermissions", dto => { try { pm.UpdateSelfPairPermissions(dto); } catch { } });
@@ -653,6 +859,28 @@ namespace NekoNetClient.WebAPI.SignalR
             hub.On<GroupPairFullInfoDto>("Client_GroupPairJoined", dto => { try { pm.AddGroupPair(dto); } catch { } });
             hub.On<GroupPairDto>("Client_GroupPairLeft", dto => { try { pm.RemoveGroupPair(dto); } catch { } });
             hub.On<GroupDto>("Client_GroupDelete", dto => { try { pm.RemoveGroup(dto.Group); } catch { } });
+        }
+
+        private void TriggerVisibleUserPullsForConfigured(int serverIndex)
+        {
+            try
+            {
+                var pm = GetPairManagerForConfigured(serverIndex);
+                var visible = pm.GetVisibleUsers();
+                if (visible.Count == 0)
+                {
+                    // Fallback: use main manager's currently visible users to seed pulls for this server
+                    try { visible = _mainPairs.GetVisibleUsers(); } catch { }
+                }
+                if (visible.Count == 0) return;
+                var apiBase = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
+                _log.LogDebug("[Reconnected Pull] Configured #{idx}: requesting data for {count} visible users", serverIndex, visible.Count);
+                foreach (var user in visible)
+                {
+                    try { Mediator.Publish(new RequestUserDataForUidMessage(user, apiBase)); } catch { }
+                }
+            }
+            catch { }
         }
 
         private async Task PostConnectBootstrapAsync(SyncService svc, HubConnection hub)
@@ -724,7 +952,15 @@ namespace NekoNetClient.WebAPI.SignalR
                         foreach (var o in online)
                         {
                             try { pm.MarkPairOnline(o, sendNotif: false); } catch { }
+                            try
+                            {
+                                var key = GetServiceApiBase(svc);
+                                _rolling.Online(o.User.UID, key);
+                            }
+                            catch { }
                         }
+                        // After online state is populated, trigger pulls for any currently visible users on this service
+                        try { TriggerVisibleUserPullsForService(svc); _ = Task.Run(async () => { try { await Task.Delay(750).ConfigureAwait(false); TriggerVisibleUserPullsForService(svc); } catch { } }); } catch { }
                     }
                 }
                 catch { }
@@ -800,7 +1036,15 @@ namespace NekoNetClient.WebAPI.SignalR
                         foreach (var o in online)
                         {
                             try { pm.MarkPairOnline(o, sendNotif: false); } catch { }
+                            try
+                            {
+                                var key = GetConfiguredResolvedUrl(serverIndex).TrimEnd('/');
+                                _rolling.Online(o.User.UID, key);
+                            }
+                            catch { }
                         }
+                        // After online state is populated, trigger pulls for any currently visible users on this server
+                        try { TriggerVisibleUserPullsForConfigured(serverIndex); _ = Task.Run(async () => { try { await Task.Delay(750).ConfigureAwait(false); TriggerVisibleUserPullsForConfigured(serverIndex); } catch { } }); } catch { }
                     }
                 }
                 catch { }
@@ -835,10 +1079,12 @@ namespace NekoNetClient.WebAPI.SignalR
                 try { await hub.InvokeAsync(method, dto).ConfigureAwait(false); } catch { }
             }
 
+            _log.LogDebug("[BroadcastPull] Requesting data for {alias} ({uid}); override={override}", msg.User.AliasOrUID, msg.User.UID, msg.ApiUrlOverride ?? "<none>");
             foreach (var kv in _hubs)
             {
                 if (kv.Value.State != HubConnectionState.Connected) continue;
                 if (!TargetMatchesService(kv.Key)) continue;
+                _log.LogDebug("[BroadcastPull] Service {svc}: invoking UserRequestData/alternates", kv.Key);
                 await TryInvokeAsync(kv.Value, "UserRequestData", userDto).ConfigureAwait(false);
                 await TryInvokeAsync(kv.Value, "RequestUserData", userDto).ConfigureAwait(false);
                 await TryInvokeAsync(kv.Value, "UserRequestCharacterData", userDto).ConfigureAwait(false);
@@ -848,6 +1094,7 @@ namespace NekoNetClient.WebAPI.SignalR
             {
                 if (kv.Value.State != HubConnectionState.Connected) continue;
                 if (!TargetMatchesConfigured(kv.Key)) continue;
+                _log.LogDebug("[BroadcastPull] Configured #{idx}: invoking UserRequestData/alternates", kv.Key);
                 await TryInvokeAsync(kv.Value, "UserRequestData", userDto).ConfigureAwait(false);
                 await TryInvokeAsync(kv.Value, "RequestUserData", userDto).ConfigureAwait(false);
                 await TryInvokeAsync(kv.Value, "UserRequestCharacterData", userDto).ConfigureAwait(false);

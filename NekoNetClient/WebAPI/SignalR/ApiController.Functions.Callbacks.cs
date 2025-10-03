@@ -156,8 +156,14 @@ public partial class ApiController
         Logger.LogDebug("Client_UserSendOffline: {dto}", dto);
         ExecuteSafely(() =>
         {
-            var key = GetResolvedUrl();
+            var key = GetResolvedUrl().TrimEnd('/');
+            // Update cross-hub presence and only clear visuals if the user is not online elsewhere
             _rolling.Offline(dto.User.UID, key);
+            if (_rolling.IsOnlineElsewhere(dto.User.UID, key))
+            {
+                Logger.LogTrace("Client_UserSendOffline suppressed visual clear for {uid} — still online elsewhere", dto.User.UID);
+                return;
+            }
             _pairManager.MarkPairOffline(dto.User);
         });
         return Task.CompletedTask;

@@ -127,6 +127,34 @@ internal sealed class ServiceSessionView
             ImGui.TextColored(ImGuiColors.DalamudRed, "Not connected");
         }
 
+        // Cross Syncing count (online users on this service who also appear online on another server), centered just under Users Online
+        try
+        {
+            var crossCount = _multi.GetCrossSyncOverlapCountForService(svc);
+            var crossText = $"Cross Syncing: {crossCount} Players";
+            var crossSize = ImGui.CalcTextSize(crossText);
+            ImGui.SetCursorPosY(ImGui.GetCursorPosY() - ImGui.GetStyle().ItemSpacing.Y);
+            ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - crossSize.X / 2);
+            ImGui.TextColored(ImGuiColors.DalamudYellow, crossText);
+            if (ImGui.IsItemHovered())
+            {
+                var details = _multi.GetCrossSyncDetailsForService(svc);
+                var builder = new System.Text.StringBuilder();
+                builder.AppendLine("Contributing players (UID → services):");
+                int shown = 0;
+                foreach (var d in details)
+                {
+                    var name = string.IsNullOrWhiteSpace(d.Name) ? string.Empty : $" ({d.Name})";
+                    builder.Append("- ").Append(d.Uid).Append(name).Append(": ")
+                           .Append(string.Join(", ", d.Services)).AppendLine();
+                    if (++shown >= 20) { builder.AppendLine("…"); break; }
+                }
+                var text = shown == 0 ? "No overlap yet. Hover shows registry when present." : builder.ToString();
+                UiSharedService.AttachToolTip(text);
+            }
+        }
+        catch { }
+
         if (!string.IsNullOrEmpty(shardText))
         {
             ImGui.SetCursorPosY(ImGui.GetCursorPosY() - ImGui.GetStyle().ItemSpacing.Y);
@@ -492,6 +520,18 @@ internal sealed class ServiceSessionView
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(ImGuiColors.DalamudRed, "Not connected");
         }
+
+        // Cross Syncing count (online users on this configured server who also appear online on another server), centered just under Users Online
+        try
+        {
+            var crossCountCfg = _multi.GetCrossSyncOverlapCountForConfigured(serverIndex);
+            var crossTextCfg = $"Cross Syncing: {crossCountCfg} Players";
+            var crossSizeCfg = ImGui.CalcTextSize(crossTextCfg);
+            ImGui.SetCursorPosY(ImGui.GetCursorPosY() - ImGui.GetStyle().ItemSpacing.Y);
+            ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth()) / 2 - crossSizeCfg.X / 2);
+            ImGui.TextColored(ImGuiColors.DalamudYellow, crossTextCfg);
+        }
+        catch { }
 
         if (!string.IsNullOrEmpty(shardText))
         {

@@ -18,6 +18,7 @@ using NekoNetClient.WebAPI.Files;
 using NekoNetClient.WebAPI.SignalR;
 using System.Collections.Concurrent;
 using NekoNetClient.Utils;
+using System;
 
 namespace NekoNetClient.PlayerData.Pairs;
 
@@ -40,6 +41,10 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
     // Track last pushed hash per service / configured index to push on changes regardless of visible deltas
     private readonly ConcurrentDictionary<SyncService, string> _lastPushedHashByService = new();
     private readonly ConcurrentDictionary<int, string> _lastPushedHashByConfigured = new();
+    // Track last push attempt to avoid tight retry loops when uploads fail or hubs flap
+    private readonly ConcurrentDictionary<SyncService, DateTime> _lastPushAttemptByService = new();
+    private readonly ConcurrentDictionary<int, DateTime> _lastPushAttemptByConfigured = new();
+    private static readonly TimeSpan PushRetryCooldown = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Creates a new multi-service distributor.
@@ -175,10 +180,19 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
             // If we have an explicit recipient override (e.g., newly visible users), bypass hash gating so they still get current data.
             if (recipientsOverride == null && !force && _lastPushedHashByService.TryGetValue(svc, out var lastHash) && string.Equals(lastHash, currentHash, StringComparison.Ordinal))
                 return;
+            // Avoid spamming pushes while a global upload batch is in-flight, unless explicitly targeting newcomers or forcing
+            if (_upload.IsUploading && recipientsOverride == null && !force)
+                return;
+            // Backoff if we recently attempted a push for this service and haven't changed data
+            if (!force && !_lastPushedHashByService.ContainsKey(svc)
+                && _lastPushAttemptByService.TryGetValue(svc, out var lastAttempt)
+                && DateTime.UtcNow - lastAttempt < PushRetryCooldown)
+                return;
 
             await _pushLock.WaitAsync().ConfigureAwait(false);
             try
             {
+                _lastPushAttemptByService[svc] = DateTime.UtcNow;
                 var data = VariousExtensions.DeepClone(_lastCreatedData!);
                 // Upload files against the appropriate CDN is handled inside FileUploadManager via global orchestrator (uses host mapping)
                 await _upload.UploadFiles(data, recipients).ConfigureAwait(false);
@@ -207,10 +221,19 @@ public sealed class VisibleUserDataDistributorMulti : DisposableMediatorSubscrib
             // If we have an explicit recipient override (e.g., newly visible users), bypass hash gating so they still get current data.
             if (recipientsOverride == null && !force && _lastPushedHashByConfigured.TryGetValue(serverIndex, out var lastHash) && string.Equals(lastHash, currentHash, StringComparison.Ordinal))
                 return;
+            // Avoid spamming pushes while a global upload batch is in-flight, unless explicitly targeting newcomers or forcing
+            if (_upload.IsUploading && recipientsOverride == null && !force)
+                return;
+            // Backoff if we recently attempted a push for this configured server and haven't changed data
+            if (!force && !_lastPushedHashByConfigured.ContainsKey(serverIndex)
+                && _lastPushAttemptByConfigured.TryGetValue(serverIndex, out var lastAttempt)
+                && DateTime.UtcNow - lastAttempt < PushRetryCooldown)
+                return;
 
             await _pushLock.WaitAsync().ConfigureAwait(false);
             try
             {
+                _lastPushAttemptByConfigured[serverIndex] = DateTime.UtcNow;
                 var data = VariousExtensions.DeepClone(_lastCreatedData!);
                 await _upload.UploadFiles(data, recipients, serverIndex).ConfigureAwait(false);
                 await _multi.PushCharacterDataConfiguredAsync(serverIndex, data, recipients).ConfigureAwait(false);

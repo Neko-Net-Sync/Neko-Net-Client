@@ -558,6 +558,38 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase, IM
             ServerState = ServerState.Connected;
             await LoadIninitialPairsAsync().ConfigureAwait(false);
             await LoadOnlinePairsAsync().ConfigureAwait(false);
+            // Proactively request fresh character data for all users currently visible on the main PairManager.
+            try
+            {
+                var visible = _pairManager.GetVisibleUsers();
+                if (visible.Count > 0)
+                {
+                    var apiBase = GetResolvedUrl();
+                    Logger.LogDebug("[Reconnected Pull] Main hub: requesting data for {count} visible users", visible.Count);
+                    foreach (var user in visible)
+                    {
+                        try { Mediator.Publish(new RequestUserDataForUidMessage(user, apiBase)); } catch { }
+                    }
+                }
+            }
+            catch { }
+            // Deferred retry: in case visibility snapshot wasn't ready yet
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(750).ConfigureAwait(false);
+                    var again = _pairManager.GetVisibleUsers();
+                    if (again.Count == 0) return;
+                    var apiBase = GetResolvedUrl();
+                    Logger.LogDebug("[Reconnected Pull:Deferred] Main hub: requesting data for {count} visible users", again.Count);
+                    foreach (var user in again)
+                    {
+                        try { Mediator.Publish(new RequestUserDataForUidMessage(user, apiBase)); } catch { }
+                    }
+                }
+                catch { }
+            });
             Mediator.Publish(new ConnectedMessage(_connectionDto));
         }
         catch (Exception ex)
